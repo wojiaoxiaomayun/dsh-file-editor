@@ -1,0 +1,365 @@
+/**
+ * The code / markdown / html file viewer: a CodeMirror 6 editor with syntax
+ * highlighting, a dirty dot, Ctrl/Cmd+S save, a read-only toggle, and a
+ * preview/edit switch for markdown (rendered output) and html (sandboxed
+ * iframe). Search-result jumps highlight the matched range in the editor.
+ */
+import { useCallback, useEffect, useRef, useState, type JSX } from 'react'
+import { createPortal } from 'react-dom'
+import { Compartment, EditorState, StateEffect, StateField } from '@codemirror/state'
+import { EditorView, keymap, lineNumbers } from '@codemirror/view'
+import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
+import { search, searchKeymap } from '@codemirror/search'
+import { Decoration, type DecorationSet } from '@codemirror/view'
+import type { Context } from '../context-types.ts'
+import { api, mediaUrl, type SessionScope } from './api.ts'
+import { languageForPath } from './lang.ts'
+import { editorTheme } from './cm-theme.ts'
+import { mdToHtml } from './md.ts'
+import { HTML_IFRAME_SANDBOX } from './html-sandbox.ts'
+import { appendToDraft } from './draft.ts'
+
+/** State effect carrying the matched ranges of a search jump (line flag = whole-line highlight). */
+const highlightEffect = StateEffect.define<Array<{ from: number; to: number; line?: boolean }>>()
+
+/** Decoration field marking the jump ranges. */
+const highlightField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update: (decorations, tr) => {
+    let next = decorations.map(tr.changes)
+    for (const effect of tr.effects) {
+      if (effect.is(highlightEffect)) {
+        next = Decoration.set(effect.value.map(r => {
+          if (r.line === true) {
+            return Decoration.line({ class: 'filex-cm-hit-line' }).range(r.from)
+          }
+          return Decoration.mark({ class: 'filex-cm-hit' }).range(r.from, r.to)
+        }))
+      }
+    }
+    return next
+  },
+  provide: (field) => EditorView.decorations.from(field),
+})
+
+/** Compute a 0-based character offset for a 1-based line (1 = first line). */
+export function lineOffset(text: string, line: number): number {
+  let pos = 0
+  const lines = text.split('\n')
+  const target = Math.max(0, line - 1)
+  for (let i = 0; i < target && i < lines.length; i++) pos += lines[i].length + 1
+  return Math.min(pos, text.length)
+}
+
+export interface EditorSave {
+  ok: boolean
+  error?: string
+}
+
+export interface TextEditorProps {
+  ctx: Context
+  scope: SessionScope
+  path: string
+  title: string
+  viewerId: 'code' | 'markdown' | 'html'
+  content: string
+  truncated: boolean
+  /** Search jump target: line + per-line ranges (0-based columns). */
+  jumpLine?: number
+  jumpRanges?: Array<{ start: number; end: number }>
+  onSaved?: (ok: boolean, error?: string) => void
+}
+
+export function TextEditor(props: TextEditorProps): JSX.Element | null {
+  const { ctx, scope, path, viewerId, content, truncated, jumpLine, jumpRanges, onSaved } = props
+  const [mode, setMode] = useState<'preview' | 'edit'>(viewerId === 'code' ? 'edit' : 'preview')
+  const [draft, setDraft] = useState<string | null>(null)
+  const [dirty, setDirty] = useState(false)
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'failed'>('idle')
+  const [readOnly, setReadOnly] = useState(false)
+  const hostRef = useRef<HTMLDivElement | null>(null)
+  const viewRef = useRef<EditorView | null>(null)
+  const savingRef = useRef(false)
+  const readOnlyCompartment = useRef(new Compartment())
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; fromLine: number; toLine: number; fromCol: number; toCol: number; empty: boolean } | null>(null)
+  const [insertError, setInsertError] = useState('')
+  const [jumpDebug, setJumpDebug] = useState('')
+  const menuRef = useRef<HTMLDivElement | null>(null)
+
+  const effectiveContent = draft ?? content
+
+  /** Apply a search jump onto a live view: selection, scroll, highlights. */
+  const applyJump = (view: EditorView): void => {
+    if (jumpLine === undefined) return
+    try {
+      const text = draft ?? content
+      const from = lineOffset(text, jumpLine)
+      // Decoration.set requires ranges sorted by `from` — the whole-line
+      // backdrop sits at the line start, so it goes first.
+      const ranges: Array<{ from: number; to: number; line?: boolean }> = []
+      let lineStart = -1
+      try {
+        lineStart = view.state.doc.line(jumpLine).from
+      } catch {
+        // line out of range after content changed
+      }
+      if (lineStart >= 0) ranges.push({ from: lineStart, to: lineStart, line: true })
+      for (const r of jumpRanges ?? []) ranges.push({ from: from + r.start, to: from + r.end })
+      view.dispatch({
+        effects: [highlightEffect.of(ranges) as StateEffect<unknown>],
+        selection: { anchor: from },
+        scrollIntoView: true,
+      })
+      setJumpDebug(`jump L${jumpLine} from=${from} ranges=${ranges.length}`)
+    } catch (error) {
+      console.warn('[dsh-file-explorer] search jump failed:', error)
+      setJumpDebug(`jump ERR: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  // Create the CodeMirror view once content is loaded.
+  useEffect(() => {
+    const host = hostRef.current
+    if (host === null) return
+    const language = languageForPath(path)
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: content,
+        extensions: [
+          lineNumbers(),
+          history(),
+          search(),
+          EditorState.tabSize.of(2),
+          EditorView.lineWrapping,
+          EditorView.contentAttributes.of({ spellcheck: 'false' }),
+          editorTheme,
+          ...(language !== null ? [language] : []),
+          readOnlyCompartment.current.of(EditorState.readOnly.of(false)),
+          highlightField,
+          EditorView.updateListener.of((update) => {
+            if (update.docChanged) {
+              setDraft(update.state.doc.toString())
+              setDirty(true)
+            }
+          }),
+          keymap.of([
+            { key: 'Mod-s', preventDefault: true, run: () => { save(); return true } },
+            ...searchKeymap,
+            ...defaultKeymap,
+            ...historyKeymap,
+          ]),
+        ],
+      }),
+      parent: host,
+    })
+    // Right-click menu: always shown; the selection action is disabled when
+    // no text is selected.
+    const onContextMenu = (e: MouseEvent): void => {
+      e.preventDefault()
+      const sel = view.state.selection.main
+      const fromLine = view.state.doc.lineAt(sel.from)
+      const toLine = view.state.doc.lineAt(sel.to)
+      setCtxMenu({
+        x: e.clientX,
+        y: e.clientY,
+        fromLine: fromLine.number,
+        toLine: toLine.number,
+        fromCol: sel.from - fromLine.from + 1,
+        toCol: sel.to - toLine.from + 1,
+        empty: sel.empty,
+      })
+    }
+    view.dom.addEventListener('contextmenu', onContextMenu)
+    viewRef.current = view
+    // Apply any pending search jump right after (re)creation — the editor may
+    // be brand-new (content just arrived), so do not rely on effect ordering.
+    applyJump(view)
+    return () => {
+      view.dom.removeEventListener('contextmenu', onContextMenu)
+      view.destroy()
+      viewRef.current = null
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [path, content])
+
+  // Re-apply the jump whenever the target line/ranges or the document text
+  // changes after the view already exists.
+  useEffect(() => {
+    const view = viewRef.current
+    if (view === null) return
+    applyJump(view)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jumpLine, jumpRanges, draft, content])
+
+  const save = useCallback((): void => {
+    const view = viewRef.current
+    if (view === null || savingRef.current) return
+    savingRef.current = true
+    setSaveState('saving')
+    void api.fsWrite(scope, path, view.state.doc.toString()).then(() => {
+      savingRef.current = false
+      setDraft(null)
+      setDirty(false)
+      setSaveState('saved')
+      onSaved?.(true)
+    }).catch((error: unknown) => {
+      savingRef.current = false
+      setSaveState('failed')
+      onSaved?.(false, error instanceof Error ? error.message : String(error))
+    })
+  }, [scope, path, onSaved])
+
+  // Reset per-file state on path change.
+  useEffect(() => {
+    setMode(viewerId === 'code' ? 'edit' : 'preview')
+    setDraft(null)
+    setDirty(false)
+    setSaveState('idle')
+    setReadOnly(false)
+    setCtxMenu(null)
+  }, [path, viewerId])
+
+  // Close the context menu on outside clicks / window blur.
+  // capture: true — the modal container stops mousedown propagation, so the
+  // bubble phase never reaches window. Clicks INSIDE the menu are ignored so
+  // the menu stays mounted long enough for its button onClick to fire.
+  useEffect(() => {
+    if (ctxMenu === null) return
+    const close = (e: MouseEvent): void => {
+      const target = e.target as Node | null
+      if (target !== null && menuRef.current !== null && menuRef.current.contains(target)) return
+      setCtxMenu(null)
+    }
+    window.addEventListener('mousedown', close, true)
+    window.addEventListener('blur', () => setCtxMenu(null))
+    return () => {
+      window.removeEventListener('mousedown', close, true)
+    }
+  }, [ctxMenu])
+
+  // Auto-dismiss the insert-failure toast.
+  useEffect(() => {
+    if (insertError === '') return
+    const timer = window.setTimeout(() => setInsertError(''), 4000)
+    return () => window.clearTimeout(timer)
+  }, [insertError])
+
+  const markdown = viewerId === 'markdown'
+  const html = viewerId === 'html'
+  const saveLabel = saveState === 'saving' ? '保存中…' : saveState === 'saved' ? '已保存' : saveState === 'failed' ? '保存失败' : ''
+
+  const reference = (range?: { fromLine: number; toLine: number; fromCol: number; toCol: number }): string => {
+    const base = `@file:${path}`
+    if (range === undefined) return base
+    const samePoint = range.fromLine === range.toLine && range.fromCol === range.toCol
+    if (samePoint) return `${base} lines:${range.fromLine}:${range.fromCol}`
+    return `${base} lines:${range.fromLine}:${range.fromCol}-${range.toLine}:${range.toCol}`
+  }
+
+  const insertSelection = (): void => {
+    if (ctxMenu === null) return
+    const result = appendToDraft(ctx, scope.sessionId, reference(ctxMenu))
+    setCtxMenu(null)
+    if (!result.ok) setInsertError(result.reason ?? '插入失败')
+  }
+
+  const insertFile = (): void => {
+    if (ctxMenu === null) return
+    const result = appendToDraft(ctx, scope.sessionId, reference())
+    setCtxMenu(null)
+    if (!result.ok) setInsertError(result.reason ?? '插入失败')
+  }
+
+  return (
+    <>
+      <div className="filex-editor-toolbar">
+        {(markdown || html) && (
+          <div className="filex-seg filex-mode-seg">
+            <button
+              type="button"
+              className={`filex-seg-btn${mode === 'preview' ? ' filex-seg-on' : ''}`}
+              onClick={() => setMode('preview')}
+            >预览</button>
+            <button
+              type="button"
+              className={`filex-seg-btn${mode === 'edit' ? ' filex-seg-on' : ''}`}
+              onClick={() => setMode('edit')}
+            >编辑</button>
+          </div>
+        )}
+        {dirty && <span className="filex-dirty" title="有未保存的改动" />}
+        {jumpDebug !== '' && <span className="filex-editor-status" title={jumpDebug}>{jumpDebug}</span>}
+        {saveLabel !== '' && <span className={`filex-editor-status${saveState === 'failed' ? ' filex-err' : ''}`}>{saveLabel}</span>}
+        <span className="filex-toolbar-spacer" />
+        <button
+          type="button"
+          className="filex-btn"
+          title={readOnly ? '切换为编辑模式' : '切换为只读模式'}
+          onClick={() => {
+            const next = !readOnly
+            setReadOnly(next)
+            viewRef.current?.dispatch({ effects: readOnlyCompartment.current.reconfigure(EditorState.readOnly.of(next)) })
+          }}
+        >{readOnly ? '编辑' : '只读'}</button>
+        <button
+          type="button"
+          className="filex-btn filex-btn-primary"
+          title="保存（Ctrl+S）"
+          onClick={save}
+          disabled={!dirty}
+        >保存</button>
+      </div>
+      {truncated && mode === 'edit' && <div className="filex-trunc-banner">文件超过 1MB，仅预览前 1MB · 保存已禁用</div>}
+      <div
+        className={`filex-editor${(markdown || html) && mode === 'preview' ? ' filex-editor-hidden' : ''}`}
+        ref={hostRef}
+      />
+      {markdown && mode === 'preview' && (
+        <div
+          className="filex-md-preview"
+          dangerouslySetInnerHTML={{ __html: mdToHtml(effectiveContent) }}
+        />
+      )}
+      {html && mode === 'preview' && (
+        <iframe
+          className="filex-html-preview"
+          sandbox={HTML_IFRAME_SANDBOX}
+          srcDoc={effectiveContent}
+          title={path}
+        />
+      )}
+      {ctxMenu !== null && createPortal(
+        <div
+          ref={menuRef}
+          className="filex-ctx-menu"
+          style={{ left: ctxMenu.x, top: ctxMenu.y }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <button type="button" className="filex-ctx-item" onClick={insertSelection} disabled={ctxMenu.empty}>
+            <span>插入选中文本到聊天框</span>
+            <span className="filex-ctx-hint">
+              {ctxMenu.empty ? '请先在编辑器中选中文本' : reference(ctxMenu)}
+            </span>
+          </button>
+          <button type="button" className="filex-ctx-item" onClick={insertFile}>
+            <span>插入整个文件到聊天框</span>
+            <span className="filex-ctx-hint">
+              {reference()}
+            </span>
+          </button>
+        </div>,
+        document.body,
+      )}
+      {insertError !== '' && createPortal(
+        <div className="filex-toast">
+          <span className="filex-toast-title">插入聊天框失败</span>
+          <span className="filex-toast-detail">{insertError}</span>
+        </div>,
+        document.body,
+      )}
+    </>
+  )
+}
+
+/** Re-exported for parity; the editor host uses mediaUrl for images/pdfs. */
+export { mediaUrl }

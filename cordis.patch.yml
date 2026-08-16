@@ -1,0 +1,8 @@
+# dsh-file-explorer bundle patch
+#
+# 通过 bundle 通道挂载：
+#   dsh plugin --profile <name> add dsh-file-explorer@<version>
+# 或手动把 'dsh-file-explorer' 加进 profile 的 dsh.profile.bundles 并 link 依赖。
+- insert:
+    - id: dsh-file-explorer
+      name: 'dsh-file-explorer'
