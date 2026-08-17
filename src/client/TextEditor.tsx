@@ -1,10 +1,11 @@
 /**
- * The code / markdown / html file viewer: a CodeMirror 6 editor with syntax
- * highlighting, a dirty dot, Ctrl/Cmd+S save, a read-only toggle, and a
- * preview/edit switch for markdown (rendered output) and html (sandboxed
- * iframe). Search-result jumps highlight the matched range in the editor.
+ * The code file viewer: a CodeMirror 6 editor with syntax highlighting, a
+ * dirty dot, Ctrl/Cmd+S save, and a read-only toggle. Search-result jumps
+ * highlight the matched range in the editor. Images / PDFs are handled by
+ * the explorer's media viewer instead (markdown / html previews were removed
+ * — rendering large documents through the markdown pipeline froze the UI).
  */
-import { useCallback, useEffect, useRef, useState, type JSX } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react'
 import { createPortal } from 'react-dom'
 import { Compartment, EditorState, StateEffect, StateField } from '@codemirror/state'
 import { EditorView, keymap, lineNumbers } from '@codemirror/view'
@@ -15,12 +16,30 @@ import type { Context } from '../context-types.ts'
 import { api, mediaUrl, type SessionScope } from './api.ts'
 import { languageForPath } from './lang.ts'
 import { editorTheme } from './cm-theme.ts'
-import { mdToHtml } from './md.ts'
-import { HTML_IFRAME_SANDBOX } from './html-sandbox.ts'
 import { appendToDraft } from './draft.ts'
 
 /** State effect carrying the matched ranges of a search jump (line flag = whole-line highlight). */
 const highlightEffect = StateEffect.define<Array<{ from: number; to: number; line?: boolean }>>()
+
+/** Editor-side safety caps (the host preview is 1 MB; the editor renders less). */
+const EDITOR_DOC_CAP = 512 * 1024      // chars handed to CodeMirror at most
+const HIGHLIGHT_DOC_CAP = 256 * 1024   // skip syntax highlighting above this (parser cost)
+const LONG_LINE_LIMIT = 8 * 1024       // above this, drop line-wrapping (minified files)
+
+/** Length of the longest line in `text` (no allocation). */
+function longestLineLength(text: string): number {
+  let max = 0
+  let start = 0
+  for (let i = 0; i < text.length; i++) {
+    if (text.charCodeAt(i) === 10) {
+      const len = i - start
+      if (len > max) max = len
+      start = i + 1
+    }
+  }
+  const len = text.length - start
+  return len > max ? len : max
+}
 
 /** Decoration field marking the jump ranges. */
 const highlightField = StateField.define<DecorationSet>({
@@ -60,8 +79,6 @@ export interface TextEditorProps {
   ctx: Context
   scope: SessionScope
   path: string
-  title: string
-  viewerId: 'code' | 'markdown' | 'html'
   content: string
   truncated: boolean
   /** Search jump target: line + per-line ranges (0-based columns). */
@@ -71,8 +88,7 @@ export interface TextEditorProps {
 }
 
 export function TextEditor(props: TextEditorProps): JSX.Element | null {
-  const { ctx, scope, path, viewerId, content, truncated, jumpLine, jumpRanges, onSaved } = props
-  const [mode, setMode] = useState<'preview' | 'edit'>(viewerId === 'code' ? 'edit' : 'preview')
+  const { ctx, scope, path, content, truncated, jumpLine, jumpRanges, onSaved } = props
   const [draft, setDraft] = useState<string | null>(null)
   const [dirty, setDirty] = useState(false)
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'failed'>('idle')
@@ -86,13 +102,21 @@ export function TextEditor(props: TextEditorProps): JSX.Element | null {
   const [jumpDebug, setJumpDebug] = useState('')
   const menuRef = useRef<HTMLDivElement | null>(null)
 
-  const effectiveContent = draft ?? content
+  // Large-file guards: the editor gets at most EDITOR_DOC_CAP chars, syntax
+  // highlighting is skipped above HIGHLIGHT_DOC_CAP (parser cost), and
+  // line-wrapping is dropped for minified files with huge single lines
+  // (laying out a 500 KB line is what freezes the tab).
+  const doc = content.length > EDITOR_DOC_CAP ? content.slice(0, EDITOR_DOC_CAP) : content
+  const maxLineLen = useMemo(() => longestLineLength(doc), [doc])
+  const wrapLines = maxLineLen <= LONG_LINE_LIMIT
+  const language = doc.length > HIGHLIGHT_DOC_CAP || !wrapLines ? null : languageForPath(path)
+  const docTruncated = truncated || content.length > EDITOR_DOC_CAP
 
   /** Apply a search jump onto a live view: selection, scroll, highlights. */
   const applyJump = (view: EditorView): void => {
     if (jumpLine === undefined) return
     try {
-      const text = draft ?? content
+      const text = draft ?? doc
       const from = lineOffset(text, jumpLine)
       // Decoration.set requires ranges sorted by `from` — the whole-line
       // backdrop sits at the line start, so it goes first.
@@ -121,16 +145,15 @@ export function TextEditor(props: TextEditorProps): JSX.Element | null {
   useEffect(() => {
     const host = hostRef.current
     if (host === null) return
-    const language = languageForPath(path)
     const view = new EditorView({
       state: EditorState.create({
-        doc: content,
+        doc,
         extensions: [
           lineNumbers(),
           history(),
           search(),
           EditorState.tabSize.of(2),
-          EditorView.lineWrapping,
+          ...(wrapLines ? [EditorView.lineWrapping] : []),
           EditorView.contentAttributes.of({ spellcheck: 'false' }),
           editorTheme,
           ...(language !== null ? [language] : []),
@@ -189,7 +212,7 @@ export function TextEditor(props: TextEditorProps): JSX.Element | null {
     if (view === null) return
     applyJump(view)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [jumpLine, jumpRanges, draft, content])
+  }, [jumpLine, jumpRanges, draft, doc])
 
   const save = useCallback((): void => {
     const view = viewRef.current
@@ -211,13 +234,12 @@ export function TextEditor(props: TextEditorProps): JSX.Element | null {
 
   // Reset per-file state on path change.
   useEffect(() => {
-    setMode(viewerId === 'code' ? 'edit' : 'preview')
     setDraft(null)
     setDirty(false)
     setSaveState('idle')
     setReadOnly(false)
     setCtxMenu(null)
-  }, [path, viewerId])
+  }, [path])
 
   // Close the context menu on outside clicks / window blur.
   // capture: true — the modal container stops mousedown propagation, so the
@@ -244,8 +266,6 @@ export function TextEditor(props: TextEditorProps): JSX.Element | null {
     return () => window.clearTimeout(timer)
   }, [insertError])
 
-  const markdown = viewerId === 'markdown'
-  const html = viewerId === 'html'
   const saveLabel = saveState === 'saving' ? '保存中…' : saveState === 'saved' ? '已保存' : saveState === 'failed' ? '保存失败' : ''
 
   const reference = (range?: { fromLine: number; toLine: number; fromCol: number; toCol: number }): string => {
@@ -273,20 +293,6 @@ export function TextEditor(props: TextEditorProps): JSX.Element | null {
   return (
     <>
       <div className="filex-editor-toolbar">
-        {(markdown || html) && (
-          <div className="filex-seg filex-mode-seg">
-            <button
-              type="button"
-              className={`filex-seg-btn${mode === 'preview' ? ' filex-seg-on' : ''}`}
-              onClick={() => setMode('preview')}
-            >预览</button>
-            <button
-              type="button"
-              className={`filex-seg-btn${mode === 'edit' ? ' filex-seg-on' : ''}`}
-              onClick={() => setMode('edit')}
-            >编辑</button>
-          </div>
-        )}
         {dirty && <span className="filex-dirty" title="有未保存的改动" />}
         {jumpDebug !== '' && <span className="filex-editor-status" title={jumpDebug}>{jumpDebug}</span>}
         {saveLabel !== '' && <span className={`filex-editor-status${saveState === 'failed' ? ' filex-err' : ''}`}>{saveLabel}</span>}
@@ -304,30 +310,20 @@ export function TextEditor(props: TextEditorProps): JSX.Element | null {
         <button
           type="button"
           className="filex-btn filex-btn-primary"
-          title="保存（Ctrl+S）"
+          title={docTruncated ? '文件被截断，禁止保存以免写坏文件' : '保存（Ctrl+S）'}
           onClick={save}
-          disabled={!dirty}
+          disabled={!dirty || docTruncated}
         >保存</button>
       </div>
-      {truncated && mode === 'edit' && <div className="filex-trunc-banner">文件超过 1MB，仅预览前 1MB · 保存已禁用</div>}
+      {docTruncated && (
+        <div className="filex-trunc-banner">
+          文件较大（{truncated ? '超过 1MB' : `超过 ${EDITOR_DOC_CAP / 1024}KB`}），仅预览前 {Math.min(content.length, EDITOR_DOC_CAP / 1024)}KB · 保存已禁用
+        </div>
+      )}
       <div
-        className={`filex-editor${(markdown || html) && mode === 'preview' ? ' filex-editor-hidden' : ''}`}
+        className="filex-editor"
         ref={hostRef}
       />
-      {markdown && mode === 'preview' && (
-        <div
-          className="filex-md-preview"
-          dangerouslySetInnerHTML={{ __html: mdToHtml(effectiveContent) }}
-        />
-      )}
-      {html && mode === 'preview' && (
-        <iframe
-          className="filex-html-preview"
-          sandbox={HTML_IFRAME_SANDBOX}
-          srcDoc={effectiveContent}
-          title={path}
-        />
-      )}
       {ctxMenu !== null && createPortal(
         <div
           ref={menuRef}

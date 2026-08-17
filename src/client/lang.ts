@@ -17,6 +17,7 @@ import { cpp } from '@codemirror/lang-cpp'
 import { rust } from '@codemirror/lang-rust'
 import { go } from '@codemirror/lang-go'
 import { php } from '@codemirror/lang-php'
+import { vue } from '@codemirror/lang-vue'
 import { shell } from '@codemirror/legacy-modes/mode/shell'
 import { toml } from '@codemirror/legacy-modes/mode/toml'
 import { dockerFile } from '@codemirror/legacy-modes/mode/dockerfile'
@@ -43,6 +44,7 @@ export function languageKeyForExt(ext: string): string | null {
     case 'md': case 'markdown': return 'md'
     case 'py': case 'pyw': return 'python'
     case 'html': case 'htm': return 'html'
+    case 'vue': return 'vue'
     case 'css': case 'scss': case 'less': return 'css'
     case 'xml': case 'xsl': case 'svg': return 'xml'
     case 'yaml': case 'yml': return 'yaml'
@@ -73,6 +75,7 @@ const FACTORIES: Record<string, () => Language | LanguageSupport> = {
   md: () => markdown(),
   python: () => python(),
   html: () => html(),
+  vue: () => vue(),
   css: () => css(),
   xml: () => xml(),
   yaml: () => yaml(),

@@ -1,7 +1,7 @@
 /**
  * The file explorer modal: left panel (file tree / name filter / content
- * search) and right panel (viewer: code editor, markdown / html preview,
- * image / pdf). Built on the /filex API.
+ * search) and right panel (viewer: code editor, image / pdf). Built on the
+ * /filex API.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react'
 import { createPortal } from 'react-dom'
@@ -10,10 +10,8 @@ import { api, mediaUrl, type FsEntry, type SearchMatch, type SessionScope } from
 import { TextEditor } from './TextEditor.tsx'
 import { appendToDraft } from './draft.ts'
 
-/** Viewer kinds dispatched by extension (mirrors DSH-better-sidebar builtins). */
+/** Viewer kinds dispatched by extension (markdown / html open in the code editor). */
 const VIEWERS: Record<string, string[]> = {
-  markdown: ['md', 'markdown'],
-  html: ['html', 'htm'],
   image: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico', 'avif'],
   pdf: ['pdf'],
 }
@@ -497,8 +495,6 @@ export function ExplorerModal(props: ExplorerModalProps): JSX.Element | null {
           ctx={ctx}
           scope={scope}
           path={openPath}
-          title={openTitle}
-          viewerId={viewer === 'markdown' ? 'markdown' : viewer === 'html' ? 'html' : 'code'}
           content={openContent}
           truncated={openTruncated}
           jumpLine={jumpLine}

@@ -132,8 +132,15 @@ function writeError(res: Parameters<typeof writeJson>[0], error: unknown): void 
  * Recursively walk a directory tree, invoking onFile for every regular file.
  * Skips IGNORED_DIRS; stops at MAX_FILES. The callback may return false to
  * stop early (or a Promise resolving to false / void for async callbacks).
+ *
+ * `opts.withSize` gates the per-file stat: listing does not need sizes (the
+ * client never displays them), and skipping the stat keeps large-workspace
+ * listings fast (stat on tens of thousands of files is seconds on Windows).
+ * Content search still opts in, because it skips files bigger than the
+ * search cap.
  */
-async function walkFiles(cwd: string, onFile: (abs: string, rel: string, size: number) => unknown): Promise<boolean> {
+async function walkFiles(cwd: string, onFile: (abs: string, rel: string, size: number) => unknown, opts: { withSize?: boolean } = {}): Promise<boolean> {
+  const withSize = opts.withSize === true
   let count = 0
   let truncated = false
   const queue: Array<{ abs: string; rel: string }> = [{ abs: cwd, rel: '' }]
@@ -157,11 +164,13 @@ async function walkFiles(cwd: string, onFile: (abs: string, rel: string, size: n
       } else if (entry.isFile()) {
         count++
         let size = 0
-        try {
-          const info = await stat(childAbs)
-          size = info.size
-        } catch {
-          size = 0
+        if (withSize) {
+          try {
+            const info = await stat(childAbs)
+            size = info.size
+          } catch {
+            size = 0
+          }
         }
         const keep = onFile(childAbs, childRel, size)
         if (keep === false) truncated = true
@@ -247,8 +256,8 @@ function buildApi(ctx: Context): Record<string, ApiMethod> {
     'fs.list': async (payload) => {
       const { cwd } = cwdOf(payload)
       const files: Array<{ name: string; relPath: string; size: number }> = []
-      const truncated = await walkFiles(cwd, (_abs, rel, size) => {
-        files.push({ name: rel.split('/').pop() ?? rel, relPath: rel, size })
+      const truncated = await walkFiles(cwd, (_abs, rel) => {
+        files.push({ name: rel.split('/').pop() ?? rel, relPath: rel, size: 0 })
         return true
       })
       files.sort((a, b) => (a.relPath < b.relPath ? -1 : a.relPath > b.relPath ? 1 : 0))
@@ -325,7 +334,7 @@ function buildApi(ctx: Context): Record<string, ApiMethod> {
           }
         }
         return true
-      })
+      }, { withSize: true })
       return { results, truncated }
     },
   }

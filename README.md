@@ -7,8 +7,8 @@
 - **文件列表**：会话标题栏 📄 按钮 / Ctrl+P 打开全屏弹窗，左侧目录树（跳过 `node_modules`/`.git`/`dist` 等）
 - **按文件名过滤**：输入即过滤
 - **全文搜索**：正则 / 大小写 / 全词匹配、包含/排除过滤，结果按文件分组、命中高亮，点击跳转并高亮匹配
-- **编辑**：CodeMirror 6（20+ 语言语法高亮、行号、撤销/重做、Ctrl+S 保存、只读切换、Tab 缩进）
-- **预览**：Markdown 渲染预览 / 编辑双模式、HTML 沙箱 iframe 预览、图片直接显示、PDF 内嵌查看
+- **编辑**：CodeMirror 6（20+ 语言语法高亮含 Vue SFC、行号、撤销/重做、Ctrl+S 保存、只读切换、Tab 缩进）
+- **预览**：图片直接显示、PDF 内嵌查看（Markdown / HTML 预览已移除——大文档渲染会卡死界面）
 
 ## 架构
 
@@ -20,11 +20,10 @@ src/
   client/
     index.tsx         入口：header 按钮 + overlay 弹窗 + Ctrl+P 快捷键
     Explorer.tsx      弹窗：文件树 / 文件名过滤 / 全文搜索 / 查看器分派
-    TextEditor.tsx    CodeMirror 6 编辑器 + markdown/html 预览切换 + 搜索跳转高亮
+    TextEditor.tsx    CodeMirror 6 编辑器 + 搜索跳转高亮
     lang.ts           扩展名 → CodeMirror 语言映射
     cm-theme.ts       CodeMirror 明暗主题（DSH alias token 驱动）
     api.ts            /filex fetch 封装
-    md.ts             轻量 Markdown 渲染（先转义后渲染，XSS 安全）
     style.ts          界面样式 + 明暗检测
 ```
 

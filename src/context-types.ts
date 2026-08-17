@@ -44,6 +44,21 @@ export interface FilexSessionStore {
   scope(id: string): unknown | undefined
 }
 
+/** Structural face of the framework session-list snapshot (`useSessions` selector input). */
+export interface FilexSessionListState {
+  /** The currently selected session id; undefined while none is selected / still loading. */
+  current?: string
+  phase?: string
+  byId?: Record<string, { cwd?: string; blank?: boolean }>
+}
+
+/**
+ * The framework-injected `useSessions` selector hook — a standard prop of
+ * root-scoped slots (shell.overlay, sidebar, …). Subscribes to the session
+ * list store and re-renders on change.
+ */
+export type FilexUseSessions = (selector: (state: FilexSessionListState) => unknown) => unknown
+
 /** The composer input face (client conversation service). */
 export interface FilexConversationInput {
   state: { getSnapshot(): { draft: string } }
