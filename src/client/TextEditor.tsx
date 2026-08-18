@@ -6,7 +6,14 @@
  * — rendering large documents through the markdown pipeline froze the UI).
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react'
-import { createPortal } from 'react-dom'
+import {
+  Button,
+  IconRightUpOutline16,
+  IconWarningOutline16,
+  Menu,
+  Toast,
+  type MenuEntry,
+} from '@deepseek-ai/dsh-client-ui-primitives'
 import { Compartment, EditorState, StateEffect, StateField } from '@codemirror/state'
 import { EditorView, keymap, lineNumbers } from '@codemirror/view'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
@@ -99,8 +106,9 @@ export function TextEditor(props: TextEditorProps): JSX.Element | null {
   const readOnlyCompartment = useRef(new Compartment())
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; fromLine: number; toLine: number; fromCol: number; toCol: number; empty: boolean } | null>(null)
   const [insertError, setInsertError] = useState('')
+  const [toastKey, setToastKey] = useState(0)
   const [jumpDebug, setJumpDebug] = useState('')
-  const menuRef = useRef<HTMLDivElement | null>(null)
+  const menuAnchorRef = useRef<HTMLSpanElement | null>(null)
 
   // Large-file guards: the editor gets at most EDITOR_DOC_CAP chars, syntax
   // highlighting is skipped above HIGHLIGHT_DOC_CAP (parser cost), and
@@ -241,31 +249,6 @@ export function TextEditor(props: TextEditorProps): JSX.Element | null {
     setCtxMenu(null)
   }, [path])
 
-  // Close the context menu on outside clicks / window blur.
-  // capture: true — the modal container stops mousedown propagation, so the
-  // bubble phase never reaches window. Clicks INSIDE the menu are ignored so
-  // the menu stays mounted long enough for its button onClick to fire.
-  useEffect(() => {
-    if (ctxMenu === null) return
-    const close = (e: MouseEvent): void => {
-      const target = e.target as Node | null
-      if (target !== null && menuRef.current !== null && menuRef.current.contains(target)) return
-      setCtxMenu(null)
-    }
-    window.addEventListener('mousedown', close, true)
-    window.addEventListener('blur', () => setCtxMenu(null))
-    return () => {
-      window.removeEventListener('mousedown', close, true)
-    }
-  }, [ctxMenu])
-
-  // Auto-dismiss the insert-failure toast.
-  useEffect(() => {
-    if (insertError === '') return
-    const timer = window.setTimeout(() => setInsertError(''), 4000)
-    return () => window.clearTimeout(timer)
-  }, [insertError])
-
   const saveLabel = saveState === 'saving' ? '保存中…' : saveState === 'saved' ? '已保存' : saveState === 'failed' ? '保存失败' : ''
 
   const reference = (range?: { fromLine: number; toLine: number; fromCol: number; toCol: number }): string => {
@@ -280,15 +263,49 @@ export function TextEditor(props: TextEditorProps): JSX.Element | null {
     if (ctxMenu === null) return
     const result = appendToDraft(ctx, scope.sessionId, reference(ctxMenu))
     setCtxMenu(null)
-    if (!result.ok) setInsertError(result.reason ?? '插入失败')
+    if (!result.ok) {
+      setInsertError(result.reason ?? '插入失败')
+      setToastKey(k => k + 1)
+    }
   }
 
   const insertFile = (): void => {
     if (ctxMenu === null) return
     const result = appendToDraft(ctx, scope.sessionId, reference())
     setCtxMenu(null)
-    if (!result.ok) setInsertError(result.reason ?? '插入失败')
+    if (!result.ok) {
+      setInsertError(result.reason ?? '插入失败')
+      setToastKey(k => k + 1)
+    }
   }
+
+  const ctxMenuItems: MenuEntry[] = ctxMenu !== null
+    ? [
+        {
+          id: 'insertSelection',
+          label: (
+            <span className="filex-ctx-label">
+              <span>插入选中文本到聊天框</span>
+              <span className="filex-ctx-hint">
+                {ctxMenu.empty ? '请先在编辑器中选中文本' : reference(ctxMenu)}
+              </span>
+            </span>
+          ),
+          icon: <IconRightUpOutline16 />,
+          disabled: ctxMenu.empty,
+        },
+        {
+          id: 'insertFile',
+          label: (
+            <span className="filex-ctx-label">
+              <span>插入整个文件到聊天框</span>
+              <span className="filex-ctx-hint">{reference()}</span>
+            </span>
+          ),
+          icon: <IconRightUpOutline16 />,
+        },
+      ]
+    : []
 
   return (
     <>
@@ -297,23 +314,25 @@ export function TextEditor(props: TextEditorProps): JSX.Element | null {
         {jumpDebug !== '' && <span className="filex-editor-status" title={jumpDebug}>{jumpDebug}</span>}
         {saveLabel !== '' && <span className={`filex-editor-status${saveState === 'failed' ? ' filex-err' : ''}`}>{saveLabel}</span>}
         <span className="filex-toolbar-spacer" />
-        <button
+        <Button
           type="button"
-          className="filex-btn"
+          size="sm"
+          variant="outline"
           title={readOnly ? '切换为编辑模式' : '切换为只读模式'}
           onClick={() => {
             const next = !readOnly
             setReadOnly(next)
             viewRef.current?.dispatch({ effects: readOnlyCompartment.current.reconfigure(EditorState.readOnly.of(next)) })
           }}
-        >{readOnly ? '编辑' : '只读'}</button>
-        <button
+        >{readOnly ? '编辑' : '只读'}</Button>
+        <Button
           type="button"
-          className="filex-btn filex-btn-primary"
+          size="sm"
+          variant="primary"
           title={docTruncated ? '文件被截断，禁止保存以免写坏文件' : '保存（Ctrl+S）'}
           onClick={save}
           disabled={!dirty || docTruncated}
-        >保存</button>
+        >保存</Button>
       </div>
       {docTruncated && (
         <div className="filex-trunc-banner">
@@ -324,34 +343,29 @@ export function TextEditor(props: TextEditorProps): JSX.Element | null {
         className="filex-editor"
         ref={hostRef}
       />
-      {ctxMenu !== null && createPortal(
-        <div
-          ref={menuRef}
-          className="filex-ctx-menu"
-          style={{ left: ctxMenu.x, top: ctxMenu.y }}
-          onMouseDown={(e) => e.stopPropagation()}
-        >
-          <button type="button" className="filex-ctx-item" onClick={insertSelection} disabled={ctxMenu.empty}>
-            <span>插入选中文本到聊天框</span>
-            <span className="filex-ctx-hint">
-              {ctxMenu.empty ? '请先在编辑器中选中文本' : reference(ctxMenu)}
-            </span>
-          </button>
-          <button type="button" className="filex-ctx-item" onClick={insertFile}>
-            <span>插入整个文件到聊天框</span>
-            <span className="filex-ctx-hint">
-              {reference()}
-            </span>
-          </button>
-        </div>,
-        document.body,
+      {ctxMenu !== null && (
+        <Menu
+          open
+          portal
+          compact
+          align="start"
+          anchor={<span ref={menuAnchorRef} className="filex-ctx-anchor" style={{ left: ctxMenu.x, top: ctxMenu.y }} />}
+          getAnchorRect={() => menuAnchorRef.current?.getBoundingClientRect() ?? null}
+          items={ctxMenuItems}
+          onSelect={(id) => {
+            if (id === 'insertSelection') insertSelection()
+            else insertFile()
+          }}
+          onClose={() => setCtxMenu(null)}
+        />
       )}
-      {insertError !== '' && createPortal(
-        <div className="filex-toast">
-          <span className="filex-toast-title">插入聊天框失败</span>
-          <span className="filex-toast-detail">{insertError}</span>
-        </div>,
-        document.body,
+      {insertError !== '' && (
+        <Toast
+          key={toastKey}
+          text={`插入聊天框失败：${insertError}`}
+          icon={<IconWarningOutline16 />}
+          onDone={() => setInsertError('')}
+        />
       )}
     </>
   )

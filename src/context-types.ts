@@ -59,6 +59,16 @@ export interface FilexSessionListState {
  */
 export type FilexUseSessions = (selector: (state: FilexSessionListState) => unknown) => unknown
 
+/**
+ * The client workspaces service face (the chat's file-open funnel). Every
+ * chat-side path open — tool-row links, produced files, prose mentions —
+ * funnels through `openPath`, which the explorer intercepts.
+ */
+export interface FilexWorkspacesService {
+  /** Open a filesystem path through the Host (OS default application). */
+  openPath(path: string): Promise<void>
+}
+
 /** The composer input face (client conversation service). */
 export interface FilexConversationInput {
   state: { getSnapshot(): { draft: string } }
@@ -88,6 +98,8 @@ declare module 'cordis' {
     webServer: FilexWebServer
     sessions: FilexSessionStore
     slots: FilexSlotsService
+    /** Client-only: the chat's file-open funnel the explorer intercepts. */
+    workspaces: FilexWorkspacesService
     /** Subscribe to session events (cordis event API). */
     on(event: string, listener: (session: unknown, event: unknown) => void): () => void
     /** DSH-vendored cordis lifecycle helper. */

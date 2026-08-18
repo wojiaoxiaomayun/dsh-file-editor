@@ -8,6 +8,7 @@
  */
 import { mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import type { Dirent } from 'node:fs'
+import { spawn } from 'node:child_process'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import type { Context, FilexHttpRequest } from './context-types.ts'
 import { isTrustedApiRequest } from './trust-fence.ts'
@@ -241,6 +242,118 @@ function parseGlobList(raw: unknown): RegExp[] {
   return out
 }
 
+/**
+ * Launch the OS file manager pointing at `target` (a directory). Detached and
+ * stdio-ignored so the spawn never blocks the host or leaks pipes; failures
+ * are swallowed — the API reports unsupported platforms instead.
+ *
+ * NOTE: never pass `windowsHide: true` on Windows — explorer.exe honors the
+ * startup show-window flag and would open its folder window hidden, making
+ * the click look dead. The plain GUI-app spawn shows the window normally.
+ */
+function openInSystemFileManager(target: string): boolean {
+  let command: string
+  let args: string[]
+  if (process.platform === 'win32') {
+    command = 'explorer'
+    args = [target]
+  } else if (process.platform === 'darwin') {
+    command = 'open'
+    args = [target]
+  } else if (process.platform === 'linux') {
+    command = 'xdg-open'
+    args = [target]
+  } else {
+    return false
+  }
+  try {
+    const child = spawn(command, args, { detached: true, stdio: 'ignore' })
+    child.on('error', () => { /* launch failures are reported as unsupported */ })
+    child.unref()
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Resolve the directory a reveal/open action should point at. Authoritative
+ * source: the session's own header cwd. When it is absent (sessions created
+ * without workspace metadata fall back to the host process cwd — usually
+ * meaningless), accept the loopback-only client's session-list cwd hint so
+ * the folder still opens where the user works.
+ */
+function revealCwdOf(ctx: Context, sessionId: string, rawHint: unknown): string {
+  const session = ctx.sessions.get(sessionId)
+  const headerCwd = session?.header.cwd
+  const hint = typeof rawHint === 'string' && rawHint !== '' ? rawHint : undefined
+  return headerCwd !== undefined && headerCwd !== ''
+    ? resolve(headerCwd)
+    : hint !== undefined && isAbsolute(hint)
+      ? resolve(hint)
+      : process.cwd()
+}
+
+/**
+ * Locate the VS Code CLI (`code`). Checks the standard install locations
+ * first, then falls back to a PATH scan. Windows `code` is a .cmd shim, so
+ * the caller must route it through `cmd /c` (spawn alone cannot execute it).
+ */
+async function resolveVscodeCli(): Promise<string | null> {
+  const candidates: string[] = []
+  if (process.platform === 'win32') {
+    const local = process.env.LOCALAPPDATA
+    if (local !== undefined) candidates.push(join(local, 'Programs', 'Microsoft VS Code', 'bin', 'code.cmd'))
+    const pf = process.env.ProgramFiles
+    if (pf !== undefined) candidates.push(join(pf, 'Microsoft VS Code', 'bin', 'code.cmd'))
+    const pf86 = process.env['ProgramFiles(x86)']
+    if (pf86 !== undefined) candidates.push(join(pf86, 'Microsoft VS Code', 'bin', 'code.cmd'))
+  } else if (process.platform === 'darwin') {
+    candidates.push('/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code')
+  } else if (process.platform === 'linux') {
+    candidates.push('/usr/bin/code', '/usr/local/bin/code', '/snap/bin/code')
+  }
+  for (const candidate of candidates) {
+    try {
+      await stat(candidate)
+      return candidate
+    } catch {
+      // try the next candidate
+    }
+  }
+  const name = process.platform === 'win32' ? 'code.cmd' : 'code'
+  const paths = (process.env.PATH ?? '').split(process.platform === 'win32' ? ';' : ':')
+  for (const dir of paths) {
+    if (dir === '') continue
+    const probe = join(dir, name)
+    try {
+      await stat(probe)
+      return probe
+    } catch {
+      // try the next PATH entry
+    }
+  }
+  return null
+}
+
+/**
+ * Launch VS Code pointed at `target` (a directory). On Windows the CLI is a
+ * .cmd shim, so it is routed through `cmd /c` with the console hidden (the
+ * hidden console belongs to cmd only — the Code GUI window is unaffected).
+ */
+function openInVscode(cli: string, target: string): boolean {
+  try {
+    const child = process.platform === 'win32'
+      ? spawn('cmd', ['/c', cli, target], { detached: true, stdio: 'ignore', windowsHide: true })
+      : spawn(cli, [target], { detached: true, stdio: 'ignore' })
+    child.on('error', () => { /* launch failures are reported as unsupported */ })
+    child.unref()
+    return true
+  } catch {
+    return false
+  }
+}
+
 type ApiMethod = (payload: Record<string, unknown>) => Promise<unknown> | unknown
 
 function buildApi(ctx: Context): Record<string, ApiMethod> {
@@ -284,6 +397,39 @@ function buildApi(ctx: Context): Record<string, ApiMethod> {
         throw new FilexError('fs-error', `cannot write "${path}": ${error instanceof Error ? error.message : String(error)}`)
       }
       return { ok: true }
+    },
+    'fs.reveal': async (payload) => {
+      const { sessionId } = cwdOf(payload)
+      const cwd = revealCwdOf(ctx, sessionId, payload.cwd)
+      const info = await stat(cwd).catch(() => {
+        throw new FilexError('fs-error', `cannot open "${cwd}": not found`, 404)
+      })
+      if (!info.isDirectory()) throw new FilexError('fs-error', `"${cwd}" is not a directory`)
+      if (!openInSystemFileManager(cwd)) {
+        throw new FilexError('unsupported', 'current platform has no file-manager launcher', 501)
+      }
+      return { ok: true, cwd }
+    },
+    'fs.vscode': async (payload) => {
+      const { sessionId } = cwdOf(payload)
+      const cwd = revealCwdOf(ctx, sessionId, payload.cwd)
+      const info = await stat(cwd).catch(() => {
+        throw new FilexError('fs-error', `cannot open "${cwd}": not found`, 404)
+      })
+      if (!info.isDirectory()) throw new FilexError('fs-error', `"${cwd}" is not a directory`)
+      const cli = await resolveVscodeCli()
+      if (cli === null) {
+        throw new FilexError('vscode-not-found', '未找到 VS Code 命令行工具（code）。请确认 VS Code 已安装且勾选了“添加到 PATH”', 404)
+      }
+      if (!openInVscode(cli, cwd)) {
+        throw new FilexError('unsupported', 'failed to launch the VS Code CLI', 501)
+      }
+      return { ok: true, cwd, cli }
+    },
+    'fs.capabilities': async () => {
+      // Machine-wide launcher availability (VS Code present?); the client
+      // hides the VSCode option when this reports false. No session needed.
+      return { vscode: (await resolveVscodeCli()) !== null }
     },
     'fs.search': async (payload) => {
       const { cwd } = cwdOf(payload)

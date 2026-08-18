@@ -1,14 +1,30 @@
 /**
  * The file explorer modal: left panel (file tree / name filter / content
  * search) and right panel (viewer: code editor, image / pdf). Built on the
- * /filex API.
+ * /filex API. The chrome composes the web shell's design-system primitives
+ * (Modal / Button / Input / Menu / Toast) so the surface follows the active
+ * theme; only the bespoke split layout and dense rows carry local CSS.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react'
-import { createPortal } from 'react-dom'
+import {
+  Button,
+  IconChevronRightOutline14,
+  IconCloseOutline16,
+  IconRefreshOutline14,
+  IconRightUpOutline16,
+  IconWarningOutline16,
+  Input,
+  Menu,
+  Modal,
+  Toast,
+  type MenuEntry,
+} from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Context } from '../context-types.ts'
 import { api, mediaUrl, type FsEntry, type SearchMatch, type SessionScope } from './api.ts'
+import { FileIcon } from './file-icon.tsx'
 import { TextEditor } from './TextEditor.tsx'
 import { appendToDraft } from './draft.ts'
+import { detectDark } from './style.ts'
 
 /** Viewer kinds dispatched by extension (markdown / html open in the code editor). */
 const VIEWERS: Record<string, string[]> = {
@@ -24,13 +40,6 @@ function viewerFor(relPath: string): string {
     if (VIEWERS[key].includes(ext)) return key
   }
   return 'code'
-}
-
-function formatSize(n: number): string {
-  if (!n) return ''
-  if (n < 1024) return `${n} B`
-  if (n < 1048576) return `${(n / 1024).toFixed(1)} KB`
-  return `${(n / 1048576).toFixed(1)} MB`
 }
 
 function parseGlobInput(raw: string): string[] {
@@ -115,30 +124,27 @@ interface FileTreeNodeProps {
   depth: number
   collapsed: Set<string>
   selected: string | null
+  light: boolean
   onToggle: (relPath: string) => void
   onSelect: (relPath: string) => void
   onContextMenu: (relPath: string, x: number, y: number) => void
 }
 
 function FileTreeNode(props: FileTreeNodeProps): JSX.Element {
-  const { node, depth, collapsed, selected, onToggle, onSelect, onContextMenu } = props
+  const { node, depth, collapsed, selected, light, onToggle, onSelect, onContextMenu } = props
   if (node.kind === 'dir') {
     const open = !collapsed.has(node.relPath)
     return (
       <div className="filex-tree-group">
         <button
           type="button"
-          className={`filex-node${selected === node.relPath ? ' filex-node-sel' : ''}`}
+          className={`filex-node${open ? ' filex-node-open' : ''}${selected === node.relPath ? ' filex-node-sel' : ''}`}
           style={{ paddingLeft: 6 + depth * 12 }}
           onClick={() => onToggle(node.relPath)}
           onContextMenu={(e) => { e.preventDefault(); onContextMenu(node.relPath, e.clientX, e.clientY) }}
         >
-          <span className="filex-chev">{open ? '▾' : '▸'}</span>
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-            {open
-              ? <><path d="M6 14l1.5-4.5A2 2 0 0 1 9.4 8H21a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="M3 12V6a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2" /></>
-              : <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />}
-          </svg>
+          <IconChevronRightOutline14 className="filex-chev" />
+          <FileIcon kind="dir" name={node.name} open={open} light={light} />
           <span className="filex-node-name" title={node.relPath}>{node.name}</span>
         </button>
         {open && node.children.map(child => (
@@ -148,6 +154,7 @@ function FileTreeNode(props: FileTreeNodeProps): JSX.Element {
             depth={depth + 1}
             collapsed={collapsed}
             selected={selected}
+            light={light}
             onToggle={onToggle}
             onSelect={onSelect}
             onContextMenu={onContextMenu}
@@ -165,10 +172,8 @@ function FileTreeNode(props: FileTreeNodeProps): JSX.Element {
       onClick={() => onSelect(node.relPath)}
       onContextMenu={(e) => { e.preventDefault(); onContextMenu(node.relPath, e.clientX, e.clientY) }}
     >
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-        <path d="M14 2v6h6" />
-      </svg>
+      <span className="filex-chev" />
+      <FileIcon kind="file" path={node.relPath} light={light} />
       <span className="filex-node-name">{node.name}</span>
     </button>
   )
@@ -177,6 +182,12 @@ function FileTreeNode(props: FileTreeNodeProps): JSX.Element {
 interface ExplorerModalProps {
   ctx: Context
   scope: SessionScope
+  /**
+   * Absolute path a chat-side path click asked the modal to open. The seq
+   * bumps on every request so a repeat click re-opens while the modal stays
+   * mounted; null means "no pending open" (plain explorer open).
+   */
+  openFileRequest?: { path: string; seq: number } | null
   onClose: () => void
 }
 
@@ -209,28 +220,48 @@ export function ExplorerModal(props: ExplorerModalProps): JSX.Element | null {
   const [savedFlash, setSavedFlash] = useState('')
   const [sideMenu, setSideMenu] = useState<{ x: number; y: number; relPath: string; line?: number } | null>(null)
   const [sideToast, setSideToast] = useState('')
-  const sideMenuRef = useRef<HTMLDivElement | null>(null)
+  const [toastKey, setToastKey] = useState(0)
+  const sideAnchorRef = useRef<HTMLSpanElement | null>(null)
   const searchSeq = useRef(0)
+  const cmEscapeRef = useRef(false)
 
-  // Close the explorer context menu on outside clicks / blur (capture phase).
+  // vscode-icons art has light-theme variants for a few glyphs; pick them on light surfaces.
+  const lightTheme = useMemo(() => !detectDark(), [])
+
+  // Escape while the CodeMirror search panel is focused belongs to the panel
+  // (close the panel, keep the explorer). The primitives Modal closes on any
+  // Escape via a document bubble listener; a capture-phase keydown listener
+  // records the case first (capture always precedes bubble regardless of
+  // registration order) so handleClose can decline that single close request.
+  // Pointer interactions reset the flag so a later mask/button close still
+  // goes through.
   useEffect(() => {
-    if (sideMenu === null) return
-    const close = (e: MouseEvent): void => {
-      const target = e.target as Node | null
-      if (target !== null && sideMenuRef.current !== null && sideMenuRef.current.contains(target)) return
-      setSideMenu(null)
+    const onKeyCapture = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return
+      const target = e.target as HTMLElement | null
+      cmEscapeRef.current = target !== null && target.closest('.cm-panel') !== null
     }
-    window.addEventListener('mousedown', close, true)
-    window.addEventListener('blur', () => setSideMenu(null))
-    return () => window.removeEventListener('mousedown', close, true)
-  }, [sideMenu])
+    const resetFlag = (): void => { cmEscapeRef.current = false }
+    document.addEventListener('keydown', onKeyCapture, true)
+    document.addEventListener('pointerdown', resetFlag, true)
+    return () => {
+      document.removeEventListener('keydown', onKeyCapture, true)
+      document.removeEventListener('pointerdown', resetFlag, true)
+    }
+  }, [])
 
-  // Auto-dismiss the toast.
-  useEffect(() => {
-    if (sideToast === '') return
-    const timer = window.setTimeout(() => setSideToast(''), 4000)
-    return () => window.clearTimeout(timer)
-  }, [sideToast])
+  const handleClose = useCallback((): void => {
+    if (cmEscapeRef.current) {
+      cmEscapeRef.current = false
+      return
+    }
+    onClose()
+  }, [onClose])
+
+  const showSideToast = (text: string): void => {
+    setSideToast(text)
+    setToastKey(k => k + 1)
+  }
 
   const refresh = useCallback(async (): Promise<void> => {
     setLoading(true)
@@ -251,19 +282,6 @@ export function ExplorerModal(props: ExplorerModalProps): JSX.Element | null {
   }, [scope])
 
   useEffect(() => { void refresh() }, [refresh])
-
-  // Esc closes the explorer (leave it to the CodeMirror search panel when its
-  // input is focused).
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key !== 'Escape') return
-      const target = e.target as HTMLElement | null
-      if (target !== null && target.closest('.cm-panel')) return
-      onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
 
   // Debounced content search.
   useEffect(() => {
@@ -296,10 +314,13 @@ export function ExplorerModal(props: ExplorerModalProps): JSX.Element | null {
   }, [searchMode, searchPattern, searchOptions, includeStr, excludeStr, scope])
 
   const openFile = useCallback(async (relPath: string, jump?: SearchMatch): Promise<void> => {
-    setSelected(relPath)
-    setOpenPath(relPath)
-    setOpenTitle(relPath.split('/').pop() ?? relPath)
-    const vw = viewerFor(relPath)
+    // Normalize separators so absolute Windows paths (backslashes) flow
+    // through the same '/' based tree / title / media logic as tree rows.
+    const norm = relPath.replace(/\\/g, '/')
+    setSelected(norm)
+    setOpenPath(norm)
+    setOpenTitle(norm.split('/').pop() ?? norm)
+    const vw = viewerFor(norm)
     setViewer(vw)
     setJumpLine(undefined)
     setJumpRanges(undefined)
@@ -314,7 +335,7 @@ export function ExplorerModal(props: ExplorerModalProps): JSX.Element | null {
       return
     }
     try {
-      const result = await api.fsRead(scope, relPath)
+      const result = await api.fsRead(scope, norm)
       if (result.kind === 'text') {
         setOpenContent(result.content)
         setOpenTruncated(result.truncated)
@@ -328,6 +349,15 @@ export function ExplorerModal(props: ExplorerModalProps): JSX.Element | null {
       setSavedFlash(error instanceof Error ? error.message : String(error))
     }
   }, [scope])
+
+  // Chat-path interception: when a path click asked this modal to open a
+  // file, load it — on mount, and again on every new request seq while the
+  // modal stays open (clicking another path switches the open file).
+  const openFileRequest = props.openFileRequest
+  useEffect(() => {
+    if (openFileRequest === null || openFileRequest === undefined) return
+    void openFile(openFileRequest.path)
+  }, [openFileRequest?.seq])
 
   const filteredEntries = useMemo(() => {
     const q = nameFilter.trim().toLowerCase()
@@ -374,8 +404,35 @@ export function ExplorerModal(props: ExplorerModalProps): JSX.Element | null {
     const ref = line !== undefined ? `@file:${relPath} lines:${line}` : `@file:${relPath}`
     const result = appendToDraft(ctx, scope.sessionId, ref)
     setSideMenu(null)
-    if (!result.ok) setSideToast(result.reason ?? '插入失败')
+    if (!result.ok) showSideToast(result.reason ?? '插入失败')
   }
+
+  const sideMenuItems: MenuEntry[] = sideMenu !== null
+    ? [
+      ...(sideMenu.line !== undefined
+        ? [{
+            id: 'insertLine',
+            label: (
+              <span className="filex-ctx-label">
+                <span>插入该行引用到聊天框</span>
+                <span className="filex-ctx-hint">{`@file:${sideMenu.relPath} lines:${sideMenu.line}`}</span>
+              </span>
+            ),
+            icon: <IconRightUpOutline16 />,
+          } as MenuEntry]
+        : []),
+      {
+        id: 'insertFile',
+        label: (
+          <span className="filex-ctx-label">
+            <span>插入文件引用到聊天框</span>
+            <span className="filex-ctx-hint">{`@file:${sideMenu.relPath}`}</span>
+          </span>
+        ),
+        icon: <IconRightUpOutline16 />,
+      },
+    ]
+    : []
 
   let sideContent: JSX.Element
   if (searchMode === 'name') {
@@ -398,10 +455,7 @@ export function ExplorerModal(props: ExplorerModalProps): JSX.Element | null {
                 onClick={() => void openFile(f.relPath)}
                 onContextMenu={(e) => { e.preventDefault(); setSideMenu({ x: e.clientX, y: e.clientY, relPath: f.relPath }) }}
               >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                  <path d="M14 2v6h6" />
-                </svg>
+                <FileIcon kind="file" path={f.relPath} light={lightTheme} />
                 <span className="filex-flat-path">{f.relPath}</span>
               </button>
             ))
@@ -418,6 +472,7 @@ export function ExplorerModal(props: ExplorerModalProps): JSX.Element | null {
               depth={0}
               collapsed={collapsed}
               selected={selected}
+              light={lightTheme}
               onToggle={toggleDir}
               onSelect={(relPath) => void openFile(relPath)}
               onContextMenu={(relPath, x, y) => setSideMenu({ x, y, relPath })}
@@ -441,10 +496,7 @@ export function ExplorerModal(props: ExplorerModalProps): JSX.Element | null {
         {groupedResults.map(group => (
           <div key={group.file} className="filex-search-group">
             <div className="filex-search-file">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                <path d="M14 2v6h6" />
-              </svg>
+              <FileIcon kind="file" path={group.file} light={lightTheme} />
               <span className="filex-search-file-name" title={group.file}>{group.file}</span>
               <span className="filex-search-file-count">{group.matches.length}</span>
             </div>
@@ -507,137 +559,150 @@ export function ExplorerModal(props: ExplorerModalProps): JSX.Element | null {
 
   return (
     <>
-    <div
-      className="filex-backdrop"
-      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}
-    >
-      <div className="filex-modal" onMouseDown={(e) => e.stopPropagation()}>
-        <div className="filex-header">
-          <span className="filex-title">
-            <span className="filex-title-text" title={openPath ?? ''}>
-              {openPath ?? '文件预览 / 编辑'}
+      <Modal
+        open
+        headless
+        className="filex-modal"
+        title={openPath ?? '文件预览 / 编辑'}
+        closeLabel="关闭"
+        onClose={handleClose}
+      >
+        <div className="filex-explorer">
+          <div className="filex-explorer-header">
+            <span className="filex-title">
+              <span className="filex-title-text" title={openPath ?? ''}>
+                {openPath ?? '文件预览 / 编辑'}
+              </span>
             </span>
-          </span>
-          <div className="filex-header-actions">
-            {savedFlash !== '' && <span className="filex-badge">{savedFlash}</span>}
-            <button
-              type="button"
-              className="filex-btn filex-btn-icon"
-              title="关闭（Esc）"
-              aria-label="关闭"
-              onClick={onClose}
-            >✕</button>
-          </div>
-        </div>
-        <div className="filex-body">
-          <div className="filex-side">
-            <div className="filex-toolbar">
-              <div className="filex-seg">
-                <button
-                  type="button"
-                  className={`filex-seg-btn${searchMode === 'name' ? ' filex-seg-on' : ''}`}
-                  onClick={() => setSearchMode('name')}
-                  title="按文件名过滤"
-                >文件名</button>
-                <button
-                  type="button"
-                  className={`filex-seg-btn${searchMode === 'content' ? ' filex-seg-on' : ''}`}
-                  onClick={() => setSearchMode('content')}
-                  title="跨工作区搜索文件内容"
-                >内容</button>
-              </div>
-              {searchMode === 'name' && (
-                <button
-                  type="button"
-                  className="filex-btn filex-btn-icon"
-                  disabled={loading}
-                  onClick={() => void refresh()}
-                  title="刷新文件列表"
-                >⟳</button>
+            <div className="filex-header-actions">
+              {savedFlash !== '' && (
+                <span className={`filex-badge${savedFlash.startsWith('保存失败') ? ' filex-badge-warn' : ''}`}>{savedFlash}</span>
               )}
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                icon={<IconCloseOutline16 />}
+                title="关闭（Esc）"
+                aria-label="关闭"
+                onClick={handleClose}
+              />
             </div>
-            {root !== '' && <div className="filex-side-pad"><p className="filex-rootpath" title={root}>{root}</p></div>}
-            {searchMode === 'name'
-              ? (
-                <div className="filex-side-pad">
-                  <input
-                    className="filex-input"
-                    autoFocus
-                    value={nameFilter}
-                    onChange={(e) => setNameFilter(e.target.value)}
-                    placeholder="按文件名过滤…（Ctrl+P 快速打开）"
-                  />
-                </div>
-              )
-              : (
-                <div className="filex-searchbox">
-                  <input
-                    className="filex-input"
-                    value={searchPattern}
-                    onChange={(e) => setSearchPattern(e.target.value)}
-                    placeholder="搜索文件内容…"
-                  />
-                  <div className="filex-search-opts">
-                    <button type="button" className={`filex-opt${searchOptions.caseSensitive ? ' filex-opt-on' : ''}`} title="区分大小写" onClick={() => toggleOpt('caseSensitive')}>Aa</button>
-                    <button type="button" className={`filex-opt${searchOptions.regex ? ' filex-opt-on' : ''}`} title="正则匹配" onClick={() => toggleOpt('regex')}>.*</button>
-                    <button type="button" className={`filex-opt${searchOptions.wholeWord ? ' filex-opt-on' : ''}`} title="全词匹配" onClick={() => toggleOpt('wholeWord')}>ab</button>
-                    <span className="filex-opt-sep" />
-                    <button type="button" className={`filex-opt${showFilters ? ' filex-opt-on' : ''}`} title="包含 / 排除" onClick={() => setShowFilters(v => !v)}>⊕</button>
-                  </div>
-                  {showFilters && (
-                    <div className="filex-filters">
-                      <div className="filex-filter-row">
-                        <span className="filex-filter-label">包含</span>
-                        <input className="filex-input" value={includeStr} onChange={(e) => setIncludeStr(e.target.value)} placeholder="*.ts, src/**" />
-                      </div>
-                      <div className="filex-filter-row">
-                        <span className="filex-filter-label">排除</span>
-                        <input className="filex-input" value={excludeStr} onChange={(e) => setExcludeStr(e.target.value)} placeholder="dist, **/*.min.js" />
-                      </div>
-                      <p className="filex-filter-hint">逗号分隔多个模式；裸目录名自动匹配任意层级（dist ≡ **/dist/**）</p>
-                    </div>
-                  )}
-                </div>
-              )}
-            {listTruncated && searchMode === 'name' && (
-              <div className="filex-side-pad"><p className="filex-filter-hint">文件过多，列表已截断（最多 30000 个文件）</p></div>
-            )}
-            <div className="filex-scroll">{sideContent}</div>
           </div>
-          {mainContent}
+          <div className="filex-explorer-body">
+            <aside className="filex-side">
+              <div className="filex-toolbar">
+                <div className="filex-seg">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    className={`filex-seg-btn${searchMode === 'name' ? ' filex-seg-on' : ''}`}
+                    onClick={() => setSearchMode('name')}
+                    title="按文件名过滤"
+                  >文件名</Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    className={`filex-seg-btn${searchMode === 'content' ? ' filex-seg-on' : ''}`}
+                    onClick={() => setSearchMode('content')}
+                    title="跨工作区搜索文件内容"
+                  >内容</Button>
+                </div>
+                {searchMode === 'name' && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    icon={<IconRefreshOutline14 />}
+                    disabled={loading}
+                    onClick={() => void refresh()}
+                    title="刷新文件列表"
+                    aria-label="刷新文件列表"
+                  />
+                )}
+              </div>
+              {root !== '' && <div className="filex-side-pad"><p className="filex-rootpath" title={root}>{root}</p></div>}
+              {searchMode === 'name'
+                ? (
+                  <div className="filex-side-pad">
+                    <Input
+                      className="filex-input"
+                      autoFocus
+                      value={nameFilter}
+                      onChange={(e) => setNameFilter(e.target.value)}
+                      placeholder="按文件名过滤…（Ctrl+P 快速打开）"
+                    />
+                  </div>
+                )
+                : (
+                  <div className="filex-searchbox">
+                    <Input
+                      className="filex-input"
+                      value={searchPattern}
+                      onChange={(e) => setSearchPattern(e.target.value)}
+                      placeholder="搜索文件内容…"
+                    />
+                    <div className="filex-search-opts">
+                      <Button type="button" size="sm" variant="ghost" className={`filex-opt${searchOptions.caseSensitive ? ' filex-opt-on' : ''}`} title="区分大小写" onClick={() => toggleOpt('caseSensitive')}>Aa</Button>
+                      <Button type="button" size="sm" variant="ghost" className={`filex-opt${searchOptions.regex ? ' filex-opt-on' : ''}`} title="正则匹配" onClick={() => toggleOpt('regex')}>.*</Button>
+                      <Button type="button" size="sm" variant="ghost" className={`filex-opt${searchOptions.wholeWord ? ' filex-opt-on' : ''}`} title="全词匹配" onClick={() => toggleOpt('wholeWord')}>ab</Button>
+                      <span className="filex-opt-sep" />
+                      <Button type="button" size="sm" variant="ghost" className={`filex-opt${showFilters ? ' filex-opt-on' : ''}`} title="包含 / 排除" onClick={() => setShowFilters(v => !v)}>⊕</Button>
+                    </div>
+                    {showFilters && (
+                      <div className="filex-filters">
+                        <div className="filex-filter-row">
+                          <span className="filex-filter-label">包含</span>
+                          <Input className="filex-input" value={includeStr} onChange={(e) => setIncludeStr(e.target.value)} placeholder="*.ts, src/**" />
+                        </div>
+                        <div className="filex-filter-row">
+                          <span className="filex-filter-label">排除</span>
+                          <Input className="filex-input" value={excludeStr} onChange={(e) => setExcludeStr(e.target.value)} placeholder="dist, **/*.min.js" />
+                        </div>
+                        <p className="filex-filter-hint">逗号分隔多个模式；裸目录名自动匹配任意层级（dist ≡ **/dist/**）</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+              {listTruncated && searchMode === 'name' && (
+                <div className="filex-side-pad"><p className="filex-filter-hint">文件过多，列表已截断（最多 30000 个文件）</p></div>
+              )}
+              <div className="filex-scroll">{sideContent}</div>
+            </aside>
+            {mainContent}
+          </div>
+          <div className="filex-status">
+            <span className="filex-status-item">{openPath !== null ? openTitle : ''}</span>
+            <span className="filex-status-hint">Ctrl+P 快速打开 · Esc 关闭</span>
+          </div>
         </div>
-        <div className="filex-status">
-          <span className="filex-status-item">{openPath ? `${formatSize(0)}` : ''}</span>
-          <span className="filex-status-hint">Ctrl+P 快速打开 · Esc 关闭</span>
-        </div>
-      </div>
-      </div>
-      {sideMenu !== null && createPortal(
-        <div
-          ref={sideMenuRef}
-          className="filex-ctx-menu"
-          style={{ left: sideMenu.x, top: sideMenu.y }}
-          onMouseDown={(e) => e.stopPropagation()}
-        >
-          {sideMenu.line !== undefined && (
-            <button type="button" className="filex-ctx-item" onClick={() => insertSideRef(sideMenu.relPath, sideMenu.line)}>
-              <span>插入该行引用到聊天框</span>
-              <span className="filex-ctx-hint">{`@file:${sideMenu.relPath} lines:${sideMenu.line}`}</span>
-            </button>
-          )}
-          <button type="button" className="filex-ctx-item" onClick={() => insertSideRef(sideMenu.relPath)}>
-            <span>插入文件引用到聊天框</span>
-            <span className="filex-ctx-hint">{`@file:${sideMenu.relPath}`}</span>
-          </button>
-        </div>,
-        document.body,
+      </Modal>
+      {sideMenu !== null && (
+        <Menu
+          open
+          portal
+          compact
+          align="start"
+          anchor={<span ref={sideAnchorRef} className="filex-ctx-anchor" style={{ left: sideMenu.x, top: sideMenu.y }} />}
+          getAnchorRect={() => sideAnchorRef.current?.getBoundingClientRect() ?? null}
+          items={sideMenuItems}
+          onSelect={(id) => {
+            if (sideMenu === null) return
+            if (id === 'insertLine' && sideMenu.line !== undefined) insertSideRef(sideMenu.relPath, sideMenu.line)
+            else insertSideRef(sideMenu.relPath)
+          }}
+          onClose={() => setSideMenu(null)}
+        />
       )}
-      {sideToast !== '' && createPortal(
-        <div className="filex-toast">
-          <span className="filex-toast-title">插入聊天框失败</span>
-          <span className="filex-toast-detail">{sideToast}</span>
-        </div>,
-        document.body,
+      {sideToast !== '' && (
+        <Toast
+          key={toastKey}
+          text={`插入聊天框失败：${sideToast}`}
+          icon={<IconWarningOutline16 />}
+          onDone={() => setSideToast('')}
+        />
       )}
     </>
   )

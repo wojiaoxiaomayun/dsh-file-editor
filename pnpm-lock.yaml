@@ -74,6 +74,9 @@ importers:
       '@lezer/highlight':
         specifier: ^1.2.3
         version: 1.2.3
+      vscode-icons-js:
+        specifier: ^11.6.1
+        version: 11.6.1
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: ^4.0.1
@@ -985,6 +988,9 @@ packages:
   '@types/hast@3.0.5':
     resolution: {integrity: sha512-rp/ezSWaD1m44dPKICGhiskI13nVr7qTloFwDa/IYkhhf5nzwP+zIQcIJh3WIFSBOy/H1PzB40jPjMDksN4F+g==}
 
+  '@types/jasmine@3.10.19':
+    resolution: {integrity: sha512-Bz6P2XoeIN13AhvVe0nS7+m2RfxVllETDjFQ/s6lyEwEfIVpPCc1Q8vPdFopFAOU5mzrU1zypXJ1xGDl5EVU9Q==}
+
   '@types/katex@0.16.8':
     resolution: {integrity: sha512-trgaNyfU+Xh2Tc+ABIb44a5AYUpicB3uwirOioeOkNPPbmgRNtcWyDeeFRzjPZENO9Vq8gvVqfhaaXWLlevVwg==}
 
@@ -1604,6 +1610,9 @@ packages:
 
   vfile@6.0.3:
     resolution: {integrity: sha512-KzIbH/9tXat2u30jf+smMwFCsno4wHVdNmzFyL+T/L3UGqqk6JKfVqOFOZEpZSHADH1k40ab6NUIXZq422ov3Q==}
+
+  vscode-icons-js@11.6.1:
+    resolution: {integrity: sha512-rht18IFYv117UlqBn6o9j258SOtwhDBmtVrGwdoLPpSj6Z5LKQIzarQDd/tCRWneU68KEX25+nsh48tAoknKNw==}
 
   w3c-keyname@2.2.8:
     resolution: {integrity: sha512-dpojBhNsCNN7T82Tm7k26A6G9ML3NkhDsnw9n/eoxSRlVBB4CEtIQ/KTCLI2Fwf3ataSXRhYFkQi3SlnFwPvPQ==}
@@ -2702,6 +2711,8 @@ snapshots:
     dependencies:
       '@types/unist': 3.0.3
 
+  '@types/jasmine@3.10.19': {}
+
   '@types/katex@0.16.8': {}
 
   '@types/mdast@4.0.4':
@@ -3425,6 +3436,10 @@ snapshots:
     dependencies:
       '@types/unist': 3.0.3
       vfile-message: 4.0.3
+
+  vscode-icons-js@11.6.1:
+    dependencies:
+      '@types/jasmine': 3.10.19
 
   w3c-keyname@2.2.8: {}
 

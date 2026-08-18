@@ -1,33 +1,83 @@
 /**
- * Client half of dsh-file-explorer: a header-action button that opens the
- * file explorer modal (file tree / name filter / content search / CodeMirror
- * editing / image + pdf viewing). Registers into the conversation header
- * actions slot and the shell overlay slot.
+ * Client half of dsh-file-explorer: a header ButtonGroup that opens either
+ * the file-explorer modal (editor mode), the session's working folder in the
+ * OS file manager (folder mode), or the workspace in VS Code (vscode mode),
+ * plus the overlay modal, the Ctrl+P shortcut, and transient notices.
+ *
+ * The ButtonGroup registers into `conversation.session.header.utilities`:
+ * the left button carries the active mode's icon and triggers its action,
+ * the right button opens a dropdown to switch between 编辑器 (editor),
+ * 文件夹 (folder), and VSCode. The choice is persisted in localStorage so it
+ * survives reloads.
  *
  * Session binding: every /filex request is conversation-scoped, so the modal
  * must know WHICH session it belongs to — the host resolves the workspace
- * from `session.header.cwd`, never from a global setting. The header button
- * carries its session's id; Ctrl+P falls back to the currently selected
- * session (`useSessions` → `state.current`, a standard kit hook of the
- * shell.overlay slot). If no session is resolvable, a notice is shown
- * instead of firing requests with an empty sessionId.
+ * from `session.header.cwd`, never from a global setting. The slot supplies
+ * the framework-resolved sessionId; Ctrl+P falls back to the currently
+ * selected session (`useSessions` → `state.current`).
  */
-import { useEffect, useSyncExternalStore, type JSX } from 'react'
+import { useEffect, useSyncExternalStore, useState, type JSX } from 'react'
+import {
+  Button,
+  IconChevronDownOutline14,
+  IconEditOutline16,
+  IconFolderOpen16,
+  Menu,
+  Tooltip,
+  type MenuEntry,
+} from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Context, FilexSessionListState, FilexUseSessions } from '../context-types.ts'
 import { ExplorerModal } from './Explorer.tsx'
+import { api } from './api.ts'
+import { wrapOpenPath } from './openpath-intercept.ts'
 import { CSS, detectDark, tokenCss } from './style.ts'
 
 /** Services required before mounting. */
-export const inject = ['slots', 'sessions']
+export const inject = ['slots', 'sessions', 'workspaces']
+
+/** Which action the header group's main button performs. */
+export type HeaderMode = 'editor' | 'folder' | 'vscode'
+
+const MODE_STORAGE_KEY = 'dsh-file-explorer.header-mode'
 
 interface Store {
   open: boolean
   sessionId: string
   notice: string | null
+  mode: HeaderMode
+  /** Whether the host can launch VS Code (probed once per activation). */
+  vscode: boolean
+  /** Absolute path a chat-side path click asked the modal to open (null = none). */
+  pendingPath: string | null
+  /** Monotonic seq so a repeated click re-opens the file while the modal stays mounted. */
+  pendingSeq: number
+}
+
+/** Read the persisted mode; anything unknown defaults to the editor. */
+function readStoredMode(): HeaderMode {
+  try {
+    const stored = window.localStorage.getItem(MODE_STORAGE_KEY)
+    if (stored === 'folder' || stored === 'vscode') return stored
+    return 'editor'
+  } catch {
+    return 'editor'
+  }
+}
+
+/** The official VS Code logo (brand colors), sized like the kit icons. */
+function VscodeIcon(props: { size?: number; className?: string }): JSX.Element {
+  const { size = 16, className } = props
+  return (
+    <svg width={size} height={size} viewBox="0 0 32 32" className={className} aria-hidden focusable="false" xmlns="http://www.w3.org/2000/svg">
+      <path d="M29.01,5.03,23.244,2.254a1.742,1.742,0,0,0-1.989.338L2.38,19.8A1.166,1.166,0,0,0,2.3,21.447c.025.027.05.053.077.077l1.541,1.4a1.165,1.165,0,0,0,1.489.066L28.142,5.75A1.158,1.158,0,0,1,30,6.672V6.605A1.748,1.748,0,0,0,29.01,5.03Z" fill="#0065a9" />
+      <path d="M29.01,26.97l-5.766,2.777a1.745,1.745,0,0,1-1.989-.338L2.38,12.2A1.166,1.166,0,0,1,2.3,10.553c.025-.027.05-.053.077-.077l1.541-1.4A1.165,1.165,0,0,1,5.41,9.01L28.142,26.25A1.158,1.158,0,0,0,30,25.328V25.4A1.749,1.749,0,0,1,29.01,26.97Z" fill="#007acc" />
+      <path d="M23.244,29.747a1.745,1.745,0,0,1-1.989-.338A1.025,1.025,0,0,0,23,28.684V3.316a1.024,1.024,0,0,0-1.749-.724,1.744,1.744,0,0,1,1.989-.339l5.765,2.772A1.748,1.748,0,0,1,30,6.6V25.4a1.748,1.748,0,0,1-.991,1.576Z" fill="#1f9cf0" />
+    </svg>
+  )
 }
 
 let ctxRef: Context | undefined
-let store: Store = { open: false, sessionId: '', notice: null }
+let store: Store = { open: false, sessionId: '', notice: null, mode: readStoredMode(), vscode: true, pendingPath: null, pendingSeq: 0 }
 const listeners = new Set<() => void>()
 let noticeTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -50,7 +100,7 @@ let activeSessionId: string | undefined
 /** Show a transient warning strip (e.g. "no session to bind the explorer to"). */
 function showNotice(text: string): void {
   if (noticeTimer !== undefined) clearTimeout(noticeTimer)
-  store = { open: false, sessionId: '', notice: text }
+  store = { ...store, open: false, sessionId: '', notice: text }
   emit()
   noticeTimer = setTimeout(() => {
     if (store.notice === text) {
@@ -67,14 +117,52 @@ function dismissNotice(): void {
 }
 
 /** Open the explorer bound to `sessionId`, falling back to the active session. */
-function openExplorer(sessionId: string | undefined): void {
+function openExplorer(sessionId: string | undefined, path?: string): void {
   const resolved = sessionId !== undefined && sessionId !== '' ? sessionId : activeSessionId
   if (resolved === undefined) {
-    showNotice('没有可用的会话：无法确定文件工作区。请先新建/选择一个会话，再从该会话标题栏的 📄 按钮打开。')
+    showNotice('没有可用的会话：无法确定文件工作区。请先新建/选择一个会话，再从该会话标题栏的按钮打开。')
     return
   }
-  store = { open: true, sessionId: resolved, notice: null }
+  store = {
+    ...store,
+    open: true,
+    sessionId: resolved,
+    notice: null,
+    ...(path !== undefined && path !== ''
+      ? { pendingPath: path, pendingSeq: store.pendingSeq + 1 }
+      : {}),
+  }
   emit()
+}
+
+/** Ask the host to reveal the session's working folder in the OS file manager. */
+async function openSystemFolder(sessionId: string | undefined, cwd?: string): Promise<void> {
+  const resolved = sessionId !== undefined && sessionId !== '' ? sessionId : activeSessionId
+  if (resolved === undefined) {
+    showNotice('没有可用的会话：无法确定文件工作区。请先新建/选择一个会话。')
+    return
+  }
+  try {
+    const result = await api.fsReveal({ sessionId: resolved }, cwd)
+    showNotice(`已打开文件夹：${result.cwd}`)
+  } catch (error) {
+    showNotice(`打开系统文件夹失败：${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+/** Ask the host to open the session's working folder in VS Code. */
+async function openInVscode(sessionId: string | undefined, cwd?: string): Promise<void> {
+  const resolved = sessionId !== undefined && sessionId !== '' ? sessionId : activeSessionId
+  if (resolved === undefined) {
+    showNotice('没有可用的会话：无法确定文件工作区。请先新建/选择一个会话。')
+    return
+  }
+  try {
+    const result = await api.fsVscode({ sessionId: resolved }, cwd)
+    showNotice(`已在 VS Code 打开：${result.cwd}`)
+  } catch (error) {
+    showNotice(`用 VS Code 打开失败：${error instanceof Error ? error.message : String(error)}`)
+  }
 }
 
 function closeExplorer(): void {
@@ -82,21 +170,108 @@ function closeExplorer(): void {
   emit()
 }
 
-/** The header action button (session header actions slot; receives sessionId). */
-function HeaderAction(props: { sessionId?: string }): JSX.Element {
+function setMode(mode: HeaderMode): void {
+  if (store.mode === mode) return
+  store = { ...store, mode }
+  emit()
+  try {
+    window.localStorage.setItem(MODE_STORAGE_KEY, mode)
+  } catch {
+    // storage unavailable — the choice lives for this page load only
+  }
+}
+
+/**
+ * Probe the host once per activation for VS Code availability and hide the
+ * VSCode option (falling back to the editor) when it is missing — the user
+ * explicitly wants the entry hidden rather than shown-but-broken.
+ */
+function probeVscode(): void {
+  void api.fsCapabilities().then((result) => {
+    store = { ...store, vscode: result.vscode }
+    if (!result.vscode && store.mode === 'vscode') store = { ...store, mode: 'editor' }
+    emit()
+  }).catch(() => {
+    // Probe failed (e.g. older host without the endpoint): assume unavailable.
+    store = { ...store, vscode: false }
+    if (store.mode === 'vscode') store = { ...store, mode: 'editor' }
+    emit()
+  })
+}
+
+const MODE_ITEMS: MenuEntry[] = [
+  { id: 'editor', label: '编辑器', icon: <IconEditOutline16 /> },
+  { id: 'folder', label: '文件夹', icon: <IconFolderOpen16 /> },
+  { id: 'vscode', label: 'VSCode', icon: <VscodeIcon /> },
+]
+
+/** The header ButtonGroup (session header utilities slot; receives sessionId). */
+function HeaderGroup(props: { sessionId?: string; useSessions?: FilexUseSessions }): JSX.Element {
+  const state = useSyncExternalStore(subscribe, getSnapshot)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const useSessions = props.useSessions ?? (() => undefined)
+  // Per-session workspace cwd from the framework session list — a hint for
+  // the reveal / vscode actions when the session carries no header cwd.
+  const sessionCwd = useSessions(
+    (s: FilexSessionListState) => (props.sessionId !== undefined ? s.byId?.[props.sessionId]?.cwd : undefined),
+  ) as string | undefined
+  const mode = state.mode
+  const items = state.vscode ? MODE_ITEMS : MODE_ITEMS.filter(item => item.id !== 'vscode')
+  const mainIcon = mode === 'folder' ? <IconFolderOpen16 /> : mode === 'vscode' ? <VscodeIcon /> : <IconEditOutline16 />
+  const mainTitle = mode === 'folder' ? '打开系统文件夹' : mode === 'vscode' ? '用 VSCode 打开工作区' : '文件预览 / 编辑（Ctrl+P）'
+
+  const onMainClick = (e: { stopPropagation(): void }): void => {
+    e.stopPropagation()
+    if (mode === 'folder') void openSystemFolder(props.sessionId, sessionCwd)
+    else if (mode === 'vscode') void openInVscode(props.sessionId, sessionCwd)
+    else openExplorer(props.sessionId)
+  }
+
   return (
-    <button
-      type="button"
-      className="filex-action"
-      title="文件预览 / 编辑（Ctrl+P）"
-      aria-label="文件预览 / 编辑"
-      onClick={(e) => { e.stopPropagation(); openExplorer(props.sessionId) }}
-    >
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-        <path d="M14 2v6h6" />
-      </svg>
-    </button>
+    <Tooltip label={mainTitle} side="bottom" delayMs={400}>
+      <Menu
+        open={menuOpen}
+        align="end"
+        portal
+        compact
+        selectedId={mode}
+        items={items}
+        onSelect={(id) => {
+          if (id === 'folder' || id === 'vscode') setMode(id)
+          else setMode('editor')
+          setMenuOpen(false)
+        }}
+        onClose={() => setMenuOpen(false)}
+        anchor={(
+          <div className="filex-group">
+            <Button
+              type="button"
+              className="filex-group-main"
+              size="sm"
+              variant="outline"
+              icon={mainIcon}
+              title={mainTitle}
+              aria-label={mainTitle}
+              onClick={onMainClick}
+            />
+            <Button
+              type="button"
+              className="filex-group-trigger"
+              size="sm"
+              variant="outline"
+              title="选择打开方式：编辑器 / 文件夹 / VSCode"
+              aria-label="选择打开方式"
+              onClick={(e) => {
+                e.stopPropagation()
+                setMenuOpen((v) => !v)
+              }}
+            >
+              <IconChevronDownOutline14 />
+            </Button>
+          </div>
+        )}
+      />
+    </Tooltip>
   )
 }
 
@@ -137,6 +312,7 @@ function ExplorerOverlay(props: { useSessions?: FilexUseSessions }): JSX.Element
     <ExplorerModal
       ctx={ctxRef}
       scope={{ sessionId: state.sessionId }}
+      openFileRequest={state.pendingPath !== null ? { path: state.pendingPath, seq: state.pendingSeq } : null}
       onClose={closeExplorer}
     />
   )
@@ -177,11 +353,11 @@ export function apply(ctx: Context): void {
       return () => { style?.remove() }
     }, 'dsh-file-explorer: styles')
 
-    // Header action button.
-    ctx.slots.inject('conversation.session.header.actions', () =>
+    // Header ButtonGroup (editor / folder / vscode) — right-aligned session utility.
+    ctx.slots.inject('conversation.session.header.utilities', () =>
       ctx.slots.register(
-        { name: 'conversation.session.header.actions', id: 'file-explorer', order: 5, label: '文件预览' },
-        HeaderAction,
+        { name: 'conversation.session.header.utilities', id: 'file-explorer', order: 10, label: '文件预览 / 编辑' },
+        HeaderGroup,
       ))
 
     // Overlay modal (also owns the Ctrl+P shortcut + the no-session notice).
@@ -190,6 +366,27 @@ export function apply(ctx: Context): void {
         { name: 'shell.overlay', id: 'file-explorer-overlay', order: 100, label: '文件预览' },
         ExplorerOverlay,
       ))
+
+    // Hide the VSCode option when the host cannot launch it.
+    probeVscode()
+
+    // Reroute every chat-side path open — tool-row path links, the
+    // produced-files row, and prose file mentions all funnel through
+    // `ctx.workspaces.openPath` — into the explorer modal instead of the
+    // Host OS. A path outside the session cwd (or unreadable) falls back to
+    // the original method, so nothing is silently swallowed.
+    ctx.effect(() => wrapOpenPath(ctx.workspaces, {
+      currentSessionId: () => activeSessionId,
+      openInEditor: async (path, sessionId) => {
+        try {
+          await api.fsRead({ sessionId }, path)
+        } catch {
+          return false
+        }
+        openExplorer(sessionId, path)
+        return true
+      },
+    }), 'dsh-file-explorer: openPath interception')
   } catch (error) {
     fail('load', error)
   }
