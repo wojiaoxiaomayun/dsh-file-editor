@@ -43,17 +43,22 @@ pnpm build     # lib/index.js（host）+ lib/client.js（client bundle，CodeMir
 ## 安装 / 挂载（desktop profile 示例）
 
 ```bash
-# 1. profile 依赖 link 本地包
+# 0. 从 npm 安装已发布的包（或见下方本地 link 方式）
 cd ~/.dsh/profiles/desktop
-pnpm add dsh-file-explorer@link:C:/xhl/agent-work/dsh-file-editor
+pnpm add @dsh-xhl/dsh-file-explorer
+# 并手动在 profile 的 dsh.profile.bundles 加： "@dsh-xhl/dsh-file-explorer"
+
+# 1. 本地开发：profile 依赖 link 本地包
+cd ~/.dsh/profiles/desktop
+pnpm add @dsh-xhl/dsh-file-explorer@link:C:/xhl/agent-work/dsh-file-editor
 # 或手动在 profile package.json 加：
-#   "dependencies": { "dsh-file-explorer": "link:C:/xhl/agent-work/dsh-file-editor" }
-#   "dsh": { "profile": { "bundles": [..., "dsh-file-explorer"] } }
+#   "dependencies": { "@dsh-xhl/dsh-file-explorer": "link:C:/xhl/agent-work/dsh-file-editor" }
+#   "dsh": { "profile": { "bundles": [..., "@dsh-xhl/dsh-file-explorer"] } }
 
 # 2. 安装依赖
 pnpm install
 
-# 3. 验证组合生效（应看到 dsh-file-explorer 行）
+# 3. 验证组合生效（应看到 @dsh-xhl/dsh-file-explorer 行）
 dsh --profile desktop --dump-config
 
 # 4. 重启 DSH（host 半必须重启加载）

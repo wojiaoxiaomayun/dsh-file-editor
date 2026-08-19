@@ -56,7 +56,7 @@ export default [
     noExternal: (id: string) => (CLIENT_EXTERNALS.includes(id) ? undefined : true),
     outputOptions: {
       entryFileNames: 'client.js',
-      banner: `window.__ModuleLoader__.load({ id: 'dsh-file-explorer', factory: (require) => {`,
+      banner: `window.__ModuleLoader__.load({ id: '@dsh-xhl/dsh-file-explorer', factory: (require) => {`,
       footer: `return module.exports; } });`,
       intro: 'var module = { exports: {} }; var exports = module.exports;',
       codeSplitting: false,
