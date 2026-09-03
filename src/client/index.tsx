@@ -7,8 +7,9 @@
  * The ButtonGroup registers into `conversation.session.header.utilities`:
  * the left button carries the active mode's icon and triggers its action,
  * the right button opens a dropdown to switch between 编辑器 (editor),
- * 文件夹 (folder), and VSCode. The choice is persisted in localStorage so it
- * survives reloads.
+ * 文件夹 (folder), and VSCode. Selecting an entry both persists it as the
+ * new default mode and immediately runs that mode's open action. The choice
+ * is persisted in localStorage so it survives reloads.
  *
  * Session binding: every /filex request is conversation-scoped, so the modal
  * must know WHICH session it belongs to — the host resolves the workspace
@@ -237,9 +238,13 @@ function HeaderGroup(props: { sessionId?: string; useSessions?: FilexUseSessions
         selectedId={mode}
         items={items}
         onSelect={(id) => {
-          if (id === 'folder' || id === 'vscode') setMode(id)
-          else setMode('editor')
+          // 下拉选中：先切换默认模式（主按钮渲染跟随），随后立即执行对应的打开动作。
+          const next = id === 'folder' || id === 'vscode' ? id : 'editor'
+          setMode(next)
           setMenuOpen(false)
+          if (next === 'folder') void openSystemFolder(props.sessionId, sessionCwd)
+          else if (next === 'vscode') void openInVscode(props.sessionId, sessionCwd)
+          else openExplorer(props.sessionId)
         }}
         onClose={() => setMenuOpen(false)}
         anchor={(
