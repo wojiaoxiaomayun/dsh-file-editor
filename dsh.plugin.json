@@ -1,6 +1,6 @@
 {
   "id": "dsh-external/@dsh-xhl/dsh-file-explorer",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "main": "./lib/index.js",
   "description": "工作区文件预览 / 编辑：文件树、文件名过滤、全文搜索、CodeMirror 6 编辑、Markdown/HTML/图片/PDF 预览",
   "engines": {
