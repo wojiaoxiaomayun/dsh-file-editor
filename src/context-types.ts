@@ -69,6 +69,28 @@ export interface FilexWorkspacesService {
   openPath(path: string): Promise<void>
 }
 
+/** Result of the chat's workspace-path open RPC (dsh-api-remotes face). */
+export interface FilexWorkspaceOpenResult {
+  ok: boolean
+  value?: { opened: boolean }
+  error?: { message: string }
+}
+
+/**
+ * The `ctx.remote.session` face (dsh-api-remotes): the remote API the
+ * conversation view uses for chat-side file opens in current runtimes —
+ * `session/openWorkspacePath` opens with the Host OS default application
+ * unless a plugin takes it over.
+ */
+export interface FilexRemoteSession {
+  openWorkspacePath(input: { path: string }): Promise<FilexWorkspaceOpenResult>
+}
+
+/** The `ctx.remote` service face (structural subset used by this plugin). */
+export interface FilexRemoteService {
+  session: FilexRemoteSession
+}
+
 /** The composer input face (client conversation service). */
 export interface FilexConversationInput {
   state: { getSnapshot(): { draft: string } }
@@ -100,6 +122,10 @@ declare module 'cordis' {
     slots: FilexSlotsService
     /** Client-only: the chat's file-open funnel the explorer intercepts. */
     workspaces: FilexWorkspacesService
+    /** Client-only: the remote API face (dsh-api-remotes); chat-side file
+     * opens route through `remote.session.openWorkspacePath` in current
+     * runtimes, which the explorer also intercepts. */
+    remote?: FilexRemoteService
     /** Subscribe to session events (cordis event API). */
     on(event: string, listener: (session: unknown, event: unknown) => void): () => void
     /** DSH-vendored cordis lifecycle helper. */

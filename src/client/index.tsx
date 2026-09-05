@@ -11,6 +11,15 @@
  * new default mode and immediately runs that mode's open action. The choice
  * is persisted in localStorage so it survives reloads.
  *
+ * The same ButtonGroup is also shown on the new-session screen through the
+ * generic `shell.overlay` floating layer (no shell change involved): a
+ * plugin-owned entry pins it to the conversation column's top-right while
+ * the column is in its hero phase — the no-session hero and the
+ * blank-session (new chat) hero, where the session header and its utilities
+ * seat are absent or deliberately hidden. The floating entry resolves its
+ * session itself: the actions fall back to the live selection
+ * (`useSessions` → `state.current`) and show a notice when none exists.
+ *
  * Session binding: every /filex request is conversation-scoped, so the modal
  * must know WHICH session it belongs to — the host resolves the workspace
  * from `session.header.cwd`, never from a global setting. The slot supplies
@@ -30,11 +39,11 @@ import {
 import type { Context, FilexSessionListState, FilexUseSessions } from '../context-types.ts'
 import { ExplorerModal } from './Explorer.tsx'
 import { api } from './api.ts'
-import { wrapOpenPath } from './openpath-intercept.ts'
+import { wrapOpenPath, wrapOpenWorkspacePath, type OpenPathInterceptDeps } from './openpath-intercept.ts'
 import { CSS, detectDark, tokenCss } from './style.ts'
 
 /** Services required before mounting. */
-export const inject = ['slots', 'sessions', 'workspaces']
+export const inject = ['slots', 'sessions', 'workspaces', 'remote', 'remote.session']
 
 /** Which action the header group's main button performs. */
 export type HeaderMode = 'editor' | 'folder' | 'vscode'
@@ -121,7 +130,7 @@ function dismissNotice(): void {
 function openExplorer(sessionId: string | undefined, path?: string): void {
   const resolved = sessionId !== undefined && sessionId !== '' ? sessionId : activeSessionId
   if (resolved === undefined) {
-    showNotice('没有可用的会话：无法确定文件工作区。请先新建/选择一个会话，再从该会话标题栏的按钮打开。')
+    showNotice('没有可用的会话：无法确定文件工作区。请先新建/选择一个会话。')
     return
   }
   store = {
@@ -280,6 +289,59 @@ function HeaderGroup(props: { sessionId?: string; useSessions?: FilexUseSessions
   )
 }
 
+/**
+ * Hero / new-session floating utility: the same HeaderGroup, rendered by the
+ * plugin itself through the generic `shell.overlay` floating layer (no shell
+ * change needed) and pinned to the conversation column's top-right corner —
+ * the spot where the session-header utilities sit once a conversation has
+ * records. Shown only while the conversation column is in its `hero` phase
+ * (no session at all, or a blank session whose header is deliberately
+ * hidden); the position is measured from the rendered column root
+ * (`[data-phase]`), so sidebar collapse and details-panel toggles are
+ * tracked automatically. Clicking behaves exactly like the header icon: in a
+ * blank-session hero the actions bind to that session, and with no session
+ * at all they surface the no-session notice.
+ */
+function HeroFilexButton(props: { useSessions?: FilexUseSessions }): JSX.Element | null {
+  const [pos, setPos] = useState<{ top: number; right: number } | null>(null)
+
+  useEffect(() => {
+    const update = (): void => {
+      const column = document.querySelector<HTMLElement>('[data-phase]')
+      if (column === null || column.getAttribute('data-phase') !== 'hero') {
+        setPos(null)
+        return
+      }
+      const rect = column.getBoundingClientRect()
+      if (rect.width === 0 || rect.height === 0) {
+        setPos(null)
+        return
+      }
+      // Mirror the session header's utilities placement: the header pads
+      // 12px top / 28px right and centers the 28px-tall group in its 32px
+      // title row (→ 14px top), so the floating icon sits exactly where the
+      // in-chat icon does.
+      const top = rect.top + 14
+      const right = window.innerWidth - rect.right + 28
+      setPos(current => current !== null && current.top === top && current.right === right ? current : { top, right })
+    }
+    const timer = window.setInterval(update, 400)
+    window.addEventListener('resize', update)
+    update()
+    return () => {
+      window.clearInterval(timer)
+      window.removeEventListener('resize', update)
+    }
+  }, [])
+
+  if (pos === null) return null
+  return (
+    <div className="filex-hero-fab" style={{ top: pos.top, right: pos.right }}>
+      <HeaderGroup useSessions={props.useSessions} />
+    </div>
+  )
+}
+
 /** The overlay entry: keyboard shortcut + modal + transient notice. */
 function ExplorerOverlay(props: { useSessions?: FilexUseSessions }): JSX.Element | null {
   const state = useSyncExternalStore(subscribe, getSnapshot)
@@ -365,33 +427,56 @@ export function apply(ctx: Context): void {
         HeaderGroup,
       ))
 
-    // Overlay modal (also owns the Ctrl+P shortcut + the no-session notice).
-    ctx.slots.inject('shell.overlay', () =>
-      ctx.slots.register(
+    // Hero / new-session floating utility: the same ButtonGroup, rendered by
+    // the plugin itself through the generic `shell.overlay` floating layer
+    // (no shell change involved) and pinned to the conversation column's
+    // top-right while the column is in its hero phase — the no-session hero
+    // and the blank-session (new chat) hero, where the session header (and
+    // its utilities seat) is absent or deliberately hidden. The entry
+    // positions itself from the rendered column, so it lands exactly where
+    // the header icon sits once the conversation has records.
+    ctx.slots.inject('shell.overlay', () => {
+      const overlay = ctx.slots.register(
         { name: 'shell.overlay', id: 'file-explorer-overlay', order: 100, label: '文件预览' },
         ExplorerOverlay,
-      ))
+      )
+      const heroFab = ctx.slots.register(
+        { name: 'shell.overlay', id: 'file-explorer-hero-fab', order: 90, label: '文件预览 / 编辑（hero）' },
+        HeroFilexButton,
+      )
+      return () => { overlay(); heroFab() }
+    })
 
     // Hide the VSCode option when the host cannot launch it.
     probeVscode()
 
     // Reroute every chat-side path open — tool-row path links, the
-    // produced-files row, and prose file mentions all funnel through
-    // `ctx.workspaces.openPath` — into the explorer modal instead of the
-    // Host OS. A path outside the session cwd (or unreadable) falls back to
-    // the original method, so nothing is silently swallowed.
-    ctx.effect(() => wrapOpenPath(ctx.workspaces, {
-      currentSessionId: () => activeSessionId,
-      openInEditor: async (path, sessionId) => {
-        try {
-          await api.fsRead({ sessionId }, path)
-        } catch {
-          return false
-        }
-        openExplorer(sessionId, path)
-        return true
-      },
-    }), 'dsh-file-explorer: openPath interception')
+    // produced-files row, and prose file mentions — into the explorer modal
+    // instead of the Host OS. Current runtimes funnel those opens through
+    // `ctx.remote.session.openWorkspacePath` (ui-chat's injected openFile);
+    // `ctx.workspaces.openPath` remains the older funnel and is wrapped too,
+    // so both doors are covered. A path outside the session cwd (or
+    // unreadable) falls back to the original method, so nothing is silently
+    // swallowed.
+    ctx.effect(() => {
+      const deps: OpenPathInterceptDeps = {
+        currentSessionId: () => activeSessionId,
+        openInEditor: async (path, sessionId) => {
+          try {
+            await api.fsRead({ sessionId }, path)
+          } catch {
+            return false
+          }
+          openExplorer(sessionId, path)
+          return true
+        },
+      }
+      const restoreOpenPath = wrapOpenPath(ctx.workspaces, deps)
+      const restoreWorkspacePath = ctx.remote?.session?.openWorkspacePath !== undefined
+        ? wrapOpenWorkspacePath(ctx.remote.session, deps)
+        : () => {}
+      return () => { restoreOpenPath(); restoreWorkspacePath() }
+    }, 'dsh-file-explorer: file-open interception')
   } catch (error) {
     fail('load', error)
   }

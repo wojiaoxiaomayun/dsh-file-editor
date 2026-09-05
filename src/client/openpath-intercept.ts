@@ -40,9 +40,11 @@ export interface OpenPathInterceptDeps {
 export function wrapOpenPath(workspaces: OpenPathService, deps: OpenPathInterceptDeps): () => void {
   // The RAW method reference (never a bound copy): restore must put back the
   // exact original so a chain of wrappers (other plugins wrapping the same
-  // method) keeps working across disposals in any order.
+  // method) keeps working across disposals in any order. The property is
+  // redefined (not assigned) so a getter-shaped service face is covered too.
+  const descriptor = Object.getOwnPropertyDescriptor(workspaces, 'openPath')
   const original = workspaces.openPath
-  workspaces.openPath = async (path: string): Promise<void> => {
+  const wrapped = async (path: string): Promise<void> => {
     const sessionId = deps.currentSessionId()
     if (sessionId !== undefined) {
       const took = await deps.openInEditor(path, sessionId)
@@ -50,7 +52,64 @@ export function wrapOpenPath(workspaces: OpenPathService, deps: OpenPathIntercep
     }
     return original.call(workspaces, path)
   }
+  Object.defineProperty(workspaces, 'openPath', {
+    configurable: true,
+    enumerable: descriptor?.enumerable ?? true,
+    writable: false,
+    value: wrapped,
+  })
   return () => {
-    workspaces.openPath = original
+    if (descriptor !== undefined) Object.defineProperty(workspaces, 'openPath', descriptor)
+    else {
+      delete workspaces.openPath
+      workspaces.openPath = original
+    }
+  }
+}
+
+/** The remote session face whose `openWorkspacePath` the wrapper replaces. */
+export interface OpenWorkspacePathService {
+  openWorkspacePath(input: { path: string }): Promise<{ ok: boolean; value?: { opened: boolean }; error?: { message: string } }>
+}
+
+/**
+ * Wrap `remote.session.openWorkspacePath` — the chat file-open funnel in
+ * current runtimes (ui-chat's `ChatView` calls it for tool-row path links,
+ * the produced-files row, and prose file mentions alike). Intercepted opens
+ * go to the explorer modal and resolve as a successful open (the caller only
+ * checks `ok`); anything that declines falls through to the original RPC,
+ * which opens the path with the Host OS default application.
+ *
+ * The generated remote face exposes `openWorkspacePath` as an own accessor
+ * (getter without setter), so a plain assignment silently fails — the
+ * property is redefined instead, and the original descriptor is restored on
+ * disposal (HMR-safe).
+ * @param service - the `remote.session` face to wrap.
+ * @param deps - per-call takeover decisions (same as {@link wrapOpenPath}).
+ * @returns the disposer restoring the original method (HMR-safe).
+ */
+export function wrapOpenWorkspacePath(service: OpenWorkspacePathService, deps: OpenPathInterceptDeps): () => void {
+  const descriptor = Object.getOwnPropertyDescriptor(service, 'openWorkspacePath')
+  const original = service.openWorkspacePath
+  const wrapped = async (input: { path: string }): Promise<{ ok: boolean; value?: { opened: boolean }; error?: { message: string } }> => {
+    const sessionId = deps.currentSessionId()
+    if (sessionId !== undefined) {
+      const took = await deps.openInEditor(input.path, sessionId)
+      if (took) return { ok: true, value: { opened: true } }
+    }
+    return original.call(service, input)
+  }
+  Object.defineProperty(service, 'openWorkspacePath', {
+    configurable: true,
+    enumerable: descriptor?.enumerable ?? true,
+    writable: false,
+    value: wrapped,
+  })
+  return () => {
+    if (descriptor !== undefined) Object.defineProperty(service, 'openWorkspacePath', descriptor)
+    else {
+      delete service.openWorkspacePath
+      service.openWorkspacePath = original
+    }
   }
 }

@@ -16,6 +16,14 @@ export const CSS = `
 .filex-group .filex-group-main{border-radius:8px 0 0 8px;padding:0 9px}
 .filex-group .filex-group-trigger{margin-left:-1px;border-radius:0 8px 8px 0;border-left:0;padding:0 7px}
 
+/* ── hero floating utility (shell.overlay entry) ─────────────────────── */
+/* The same ButtonGroup, pinned by the plugin to the conversation column's
+   top-right while the column is in its hero phase. The shell.overlay layer
+   is click-through by design, so the entry opts back into pointer events;
+   no explicit z-index keeps it below sibling overlay entries (modal,
+   notices) and any body-portaled popup. */
+.filex-hero-fab{position:fixed;pointer-events:auto}
+
 /* ── transient notice strip ──────────────────────────────────────────── */
 .filex-notice{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:2147483003;display:flex;align-items:center;gap:10px;max-width:70vw;padding:9px 14px;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--dsw-alias-state-warn-primary,#f59e0b);background:var(--dsw-alias-bg-layer-2,#1b1b22);border:1px solid rgba(245,158,11,.5);border-radius:10px;box-shadow:0 8px 28px rgba(0,0,0,.45);pointer-events:auto}
 .filex-notice-btn{border:0;background:transparent;color:inherit;cursor:pointer;font-size:14px;line-height:1;padding:2px 4px;opacity:.7;flex-shrink:0}
