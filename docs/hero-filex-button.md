@@ -33,7 +33,7 @@
 3. 定位取 `top: rect.top + 14`、`right: viewportWidth - rect.right + 28`，
    与有记录窗口里标题栏工具位完全一致（header 上边距 12px + 28px 高的按钮
    在 32px 标题行垂直居中 → 14px；右边距 28px）。
-4. 渲染同一个 `HeaderGroup`（主按钮 + 模式下拉），点击行为与标题栏一致：
+4. 渲染同一个 `HeaderGroup`（单个内置编辑器图标），点击行为与标题栏一致：
    空白会话绑定该会话（cwd = 其工作区）；完全无会话时给出提示。
 5. 不设显式 z-index（`.filex-hero-fab{position:fixed;pointer-events:auto}`），
    在 overlay 层内按 DOM 顺序排在弹窗/提示之下。
@@ -67,7 +67,7 @@ getter 访问器**（own accessor，`configurable: true`），普通赋值静默
 浏览器 cookie，驱动 headless Chrome 探测真实 GUI；`--port` 指定当前
 GUI 端口）：
 
-- hero 阶段：`.filex-group` 渲染在会话列右上角（`top≈14`、右缘距列右缘
+- hero 阶段：`.filex-header-btn` 渲染在会话列右上角（`top≈14`、右缘距列右缘
   ≈28px、`z-index:auto`），点击可打开文件预览弹窗；
 - 有记录会话：浮层隐藏，标题栏图标照常显示，无重复图标；
 - 对话内点击 `fileLink` 文件链接：编辑器弹窗打开并加载该文件（显示

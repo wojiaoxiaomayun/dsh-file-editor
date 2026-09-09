@@ -4,29 +4,27 @@
 
 ## 功能
 
-- **标题栏 ButtonGroup**（`conversation.session.header.utilities`）：左侧按钮 + 右侧下拉（编辑器 / 文件夹 / VSCode）
-  - **Hero / 新建会话同样显示**：同一 ButtonGroup 通过框架通用浮层 `shell.overlay` 由插件自身定位到会话列右上角（hero 阶段显示，有记录后由标题栏图标接管，无重复）；纯插件实现，不改动框架代码（详见 `docs/hero-filex-button.md`）
+- **标题栏图标**（`conversation.session.header.utilities`）：一个内置编辑器图标，点击打开文件预览 / 编辑弹窗
+  - **Hero / 新建会话同样显示**：同一图标通过框架通用浮层 `shell.overlay` 由插件自身定位到会话列右上角（hero 阶段显示，有记录后由标题栏图标接管，无重复）；纯插件实现，不改动框架代码（详见 `docs/hero-filex-button.md`）
   - **对话内点击文件 → 编辑器预览**：聊天里的文件路径链接（工具行、产物行、正文提及）默认用系统程序打开；插件拦截 `remote.session.openWorkspacePath` 与 `workspaces.openPath` 两条通道，改为在编辑器弹窗中预览（目录或 cwd 外的路径仍落回系统打开）
-  - **编辑器**（默认）：点击打开全屏文件预览 / 编辑弹窗（Ctrl+P 亦可）
-  - **文件夹**：点击直接打开会话工作区所在的**系统文件夹**（Windows `explorer` / macOS `open` / Linux `xdg-open`）
-  - **VSCode**：点击用 `code` 命令行在 **VS Code** 中打开会话工作区（自动探测安装位置 / PATH）
-  - 选择记忆在 localStorage，点击后底部提示确认打开的路径；下拉选中某项会先切换默认打开方式，随后立即执行对应的打开动作
+  - 打开系统文件夹 / 在外部编辑器（如 VS Code）打开工作区**由 DSH 新版壳自带**，本插件不再提供模式下拉与外部启动器，只保留内置编辑器
 - **文件列表**：左侧目录树（跳过 `node_modules`/`.git`/`dist` 等）
 - **按文件名过滤**：输入即过滤
 - **全文搜索**：正则 / 大小写 / 全词匹配、包含/排除过滤，结果按文件分组、命中高亮，点击跳转并高亮匹配
 - **编辑**：CodeMirror 6（20+ 语言语法高亮含 Vue SFC、行号、撤销/重做、Ctrl+S 保存、只读切换、Tab 缩进）
 - **预览**：图片直接显示、PDF 内嵌查看（Markdown / HTML 预览已移除——大文档渲染会卡死界面）
+- **全屏**：弹窗标题栏的全屏按钮，一键把预览 / 编辑弹窗放大到整个窗口（图标转为「退出全屏」，再点一次还原）
 - **界面**：复用 Web 壳设计系统（`@deepseek-ai/dsh-client-ui-primitives`：Button / Menu / Modal / Input / Toast / Tooltip + `--dsw-*` token），随主题明暗自适应
 
 ## 架构
 
 ```
 src/
-  index.ts            Host：/filex/api JSON 路由（session.cwd / fs.list / fs.read / fs.write / fs.search / fs.reveal）
+  index.ts            Host：/filex/api JSON 路由（session.cwd / fs.list / fs.read / fs.write / fs.search）
                       + /filex/file 媒体路由（图片/PDF 字节），loopback 信任围栏
   trust-fence.ts      Host-header loopback 校验（DNS-rebinding 防护）
   client/
-    index.tsx         入口：header ButtonGroup（编辑器/文件夹模式）+ overlay 弹窗 + Ctrl+P 快捷键
+    index.tsx         入口：header 图标（内置编辑器）+ overlay 弹窗 + Ctrl+P 快捷键
     Explorer.tsx      弹窗：文件树 / 文件名过滤 / 全文搜索 / 查看器分派（primitives 重排）
     TextEditor.tsx    CodeMirror 6 编辑器 + 搜索跳转高亮
     lang.ts           扩展名 → CodeMirror 语言映射

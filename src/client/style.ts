@@ -8,16 +8,17 @@
  * inputs, modals, toasts, tooltips) is left to them; this sheet only covers
  * the explorer's bespoke layout — the split body, tree rows, search rows,
  * editor chrome — and the small adjustments that compose primitives into
- * native-looking pieces (the header ButtonGroup, the modal surface).
+ * native-looking pieces (the header icon, the modal surface).
  */
 export const CSS = `
-/* ── header ButtonGroup (utilities slot) ─────────────────────────────── */
-.filex-group{display:inline-flex;align-items:center;position:relative}
-.filex-group .filex-group-main{border-radius:8px 0 0 8px;padding:0 9px}
-.filex-group .filex-group-trigger{margin-left:-1px;border-radius:0 8px 8px 0;border-left:0;padding:0 7px}
+/* ── header icon (utilities slot) ────────────────────────────────────── */
+/* Same 28×28 round button as dsh-git-gui's header entry (.gg-header-btn):
+   the primitive sm button is already 28px tall with a 16px icon, so only
+   the width / padding / radius need pinning down. */
+.filex-header-btn{width:28px;height:28px;padding:0;border-radius:14px}
 
 /* ── hero floating utility (shell.overlay entry) ─────────────────────── */
-/* The same ButtonGroup, pinned by the plugin to the conversation column's
+/* The same icon, pinned by the plugin to the conversation column's
    top-right while the column is in its hero phase. The shell.overlay layer
    is click-through by design, so the entry opts back into pointer events;
    no explicit z-index keeps it below sibling overlay entries (modal,
@@ -31,6 +32,12 @@ export const CSS = `
 
 /* ── modal surface (headless primitives Modal) ───────────────────────── */
 .filex-modal{width:min(1200px,92vw);height:min(780px,88vh);gap:0;padding:0;border-radius:16px}
+/* Full-viewport mode (header toggle). The shell's dialog sits in a fixed
+   root with 24px padding, so a fixed inset:0 card fills the whole window
+   without being inset by that padding. */
+.filex-modal-full{position:fixed;inset:0;width:auto;height:auto;border-radius:0}
+/* The expand-corners glyph rotated 180° reads as "exit fullscreen". */
+.filex-fs-on{transform:rotate(180deg)}
 
 /* ── explorer frame ──────────────────────────────────────────────────── */
 .filex-explorer{display:flex;flex-direction:column;height:100%;min-height:0}

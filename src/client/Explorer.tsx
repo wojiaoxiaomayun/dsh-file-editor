@@ -10,6 +10,7 @@ import {
   Button,
   IconChevronRightOutline14,
   IconCloseOutline16,
+  IconFullscreenOutline16,
   IconRefreshOutline14,
   IconRightUpOutline16,
   IconWarningOutline16,
@@ -218,6 +219,8 @@ export function ExplorerModal(props: ExplorerModalProps): JSX.Element | null {
   const [jumpRanges, setJumpRanges] = useState<Array<{ start: number; end: number }> | undefined>(undefined)
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [savedFlash, setSavedFlash] = useState('')
+  /** Full-viewport mode: the modal card fills the whole window (toggle in the header). */
+  const [fullscreen, setFullscreen] = useState(false)
   const [sideMenu, setSideMenu] = useState<{ x: number; y: number; relPath: string; line?: number } | null>(null)
   const [sideToast, setSideToast] = useState('')
   const [toastKey, setToastKey] = useState(0)
@@ -562,7 +565,7 @@ export function ExplorerModal(props: ExplorerModalProps): JSX.Element | null {
       <Modal
         open
         headless
-        className="filex-modal"
+        className={`filex-modal${fullscreen ? ' filex-modal-full' : ''}`}
         title={openPath ?? '文件预览 / 编辑'}
         closeLabel="关闭"
         onClose={handleClose}
@@ -578,6 +581,15 @@ export function ExplorerModal(props: ExplorerModalProps): JSX.Element | null {
               {savedFlash !== '' && (
                 <span className={`filex-badge${savedFlash.startsWith('保存失败') ? ' filex-badge-warn' : ''}`}>{savedFlash}</span>
               )}
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                icon={<IconFullscreenOutline16 className={fullscreen ? 'filex-fs-on' : undefined} />}
+                title={fullscreen ? '退出全屏' : '全屏'}
+                aria-label={fullscreen ? '退出全屏' : '全屏'}
+                onClick={() => setFullscreen(v => !v)}
+              />
               <Button
                 type="button"
                 size="sm"
