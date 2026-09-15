@@ -8,7 +8,7 @@
 - **Hero / 新建会话页 ButtonGroup**：同一浮层位置由插件定位到会话列右上角（hero 阶段显示，有记录后由标题栏图标接管，无重复）；hero 上为**左主按钮 + 右下拉**的组合：
   - **编辑器**（默认）：点击打开文件预览 / 编辑弹窗（Ctrl+P 亦可）
   - **文件夹**：点击直接打开会话工作区所在的**系统文件夹**（Windows `explorer` / macOS `open` / Linux `xdg-open`）
-  - **VSCode**：点击用 `code` 命令行在 **VS Code** 中打开会话工作区（自动探测安装位置 / PATH；未安装则该项自动隐藏）
+  - **VSCode**：点击用 `code` 命令行在 **VS Code** 中打开会话工作区（自动探测安装位置 / PATH；宿主明确报告未安装时该项自动隐藏，探测请求本身失败则保持可见并退避重试）
   - 选择记忆在 localStorage，点击后底部提示确认打开的路径；下拉选中某项会先切换默认打开方式，随后立即执行对应的打开动作
   - 纯插件实现，不改动框架代码（详见 `docs/hero-filex-button.md`）
 - **对话内点击文件 → 编辑器预览**：聊天里的文件路径链接（工具行、产物行、正文提及）默认用系统程序打开；插件拦截 `remote.session.openWorkspacePath` 与 `workspaces.openPath` 两条通道，改为在编辑器弹窗中预览（目录或 cwd 外的路径仍落回系统打开）
@@ -43,6 +43,11 @@ src/
 pnpm install
 pnpm build     # lib/index.js（host）+ lib/client.js（client bundle，CodeMirror 内联）
 ```
+
+> 构建采用**原地覆盖**（不再先删除 `lib/`）。宿主半在进程启动时载入内存，而 profile
+> 若 link 到本工作区则会直读磁盘：构建中途清空目录会让 HMR 读到空 bundle，导致
+> `/filex` 路由与客户端 import 瞬时失败（表现为 `unknown filex API method ...`）。
+> 改动客户端后无需重启，宿主半的改动需重启 DSH 进程。
 
 ## 安装 / 挂载（desktop profile 示例）
 

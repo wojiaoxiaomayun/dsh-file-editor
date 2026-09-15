@@ -191,20 +191,34 @@ function setMode(mode: HeaderMode): void {
 }
 
 /**
- * Probe the host once per activation for VS Code availability and hide the
- * VSCode option (falling back to the editor) when it is missing — the user
- * explicitly wants the entry hidden rather than shown-but-broken.
+ * Probe the host for VS Code availability and hide the VSCode option when the
+ * host positively reports it missing (a `{ vscode: false }` answer), so the
+ * entry never shows as broken when the CLI is genuinely absent.
+ *
+ * A FAILED probe is not an answer: the host may simply be mid-reload (its
+ * routes vanish for a moment while the bundle is rewritten), and latching
+ * "unavailable" then would hide VSCode for the rest of the page's life over a
+ * transient hiccup. Failures therefore keep the option visible and retry a few
+ * times; picking it without a CLI still surfaces the host's own
+ * 「未找到 VS Code 命令行工具」 error, which is the honest report.
  */
-function probeVscode(): void {
+function probeVscode(attempt = 0): void {
   void api.fsCapabilities().then((result) => {
-    store = { ...store, vscode: result.vscode }
-    if (!result.vscode && store.mode === 'vscode') store = { ...store, mode: 'editor' }
-    emit()
+    if (result.vscode === false) {
+      store = { ...store, vscode: false }
+      if (store.mode === 'vscode') store = { ...store, mode: 'editor' }
+      emit()
+      return
+    }
+    if (!store.vscode) {
+      store = { ...store, vscode: true }
+      emit()
+    }
   }).catch(() => {
-    // Probe failed (e.g. older host without the endpoint): assume unavailable.
-    store = { ...store, vscode: false }
-    if (store.mode === 'vscode') store = { ...store, mode: 'editor' }
-    emit()
+    // Transient failure (host reloading / older host without the endpoint):
+    // keep the entry and retry with backoff instead of hiding it.
+    if (attempt >= 4) return
+    window.setTimeout(() => probeVscode(attempt + 1), 1000 * (attempt + 1))
   })
 }
 
