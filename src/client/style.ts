@@ -20,10 +20,13 @@ export const CSS = `
 /* ── hero ButtonGroup (shell.overlay entry) ──────────────────────────── */
 /* The mode group shown only on the hero / new-session screen: the left
    button carries the remembered mode's icon, the right chevron the mode
-   dropdown. */
-.filex-group{display:inline-flex;align-items:center;position:relative}
-.filex-group .filex-group-main{border-radius:8px 0 0 8px;padding:0 9px}
-.filex-group .filex-group-trigger{margin-left:-1px;border-radius:0 8px 8px 0;border-left:0;padding:0 7px}
+   dropdown. Outer corners reuse the in-chat header-button radius (14px on
+   a 28px-tall button = a fully round cap), so the group reads as one pill
+   with the same curve as the session header icon. */
+.filex-group{display:inline-flex;align-items:center;position:relative;height:28px}
+.filex-group .filex-group-main,.filex-group .filex-group-trigger{height:28px}
+.filex-group .filex-group-main{border-radius:14px 0 0 14px;padding:0 9px}
+.filex-group .filex-group-trigger{margin-left:-1px;border-radius:0 14px 14px 0;border-left:0;padding:0 7px}
 
 /* ── hero floating utility (shell.overlay entry) ─────────────────────── */
 /* The ButtonGroup, pinned by the plugin to the conversation column's
