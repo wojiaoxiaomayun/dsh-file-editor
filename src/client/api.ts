@@ -63,6 +63,18 @@ export const api = {
     call<FsTextResult | FsBinaryResult>('fs.read', { sessionId: scope.sessionId, path }, signal),
   fsWrite: (scope: SessionScope, path: string, content: string) =>
     call<{ ok: true }>('fs.write', { sessionId: scope.sessionId, path, content }),
+  fsReveal: (scope: SessionScope, cwd?: string, signal?: AbortSignal) =>
+    call<{ ok: true; cwd: string }>('fs.reveal', {
+      sessionId: scope.sessionId,
+      ...(cwd !== undefined && cwd !== '' ? { cwd } : {}),
+    }, signal),
+  fsVscode: (scope: SessionScope, cwd?: string, signal?: AbortSignal) =>
+    call<{ ok: true; cwd: string; cli: string }>('fs.vscode', {
+      sessionId: scope.sessionId,
+      ...(cwd !== undefined && cwd !== '' ? { cwd } : {}),
+    }, signal),
+  fsCapabilities: (signal?: AbortSignal) =>
+    call<{ vscode: boolean }>('fs.capabilities', {}, signal),
   fsSearch: (scope: SessionScope, pattern: string, options: { caseSensitive?: boolean; regex?: boolean; wholeWord?: boolean }, include: string[], exclude: string[], signal?: AbortSignal) =>
     call<{ results: SearchMatch[]; truncated: boolean }>('fs.search', {
       sessionId: scope.sessionId,

@@ -1,9 +1,9 @@
 /**
  * Live-GUI verification for dsh-file-explorer (local dev helper):
- *   1. hero phase — the floating editor icon sits at the conversation
+ *   1. hero phase — the floating mode ButtonGroup sits at the conversation
  *      column's top-right (top ≈ +14, right gap ≈ 28, z-index auto) and
- *      clicking it opens the explorer modal;
- *   2. opening a session with records — the floating icon hides and the
+ *      clicking the main button opens the explorer modal;
+ *   2. opening a session with records — the floating group hides and the
  *      header utilities icon takes over (no duplicate);
  *   3. clicking a chat file link (tool-row fileLink) — the explorer modal
  *      opens with the file loaded in the editor.
@@ -90,7 +90,7 @@ try {
   // 1. hero FAB position + click
   console.log('[1] hero:', await evalJs(`(() => {
     const fab = document.querySelector('.filex-hero-fab')
-    const g = document.querySelector('.filex-header-btn')
+    const g = document.querySelector('.filex-group')
     const col = document.querySelector('[data-phase]')
     if (!fab || !g || !col) return JSON.stringify({ fab: !!fab, phase: col?.getAttribute('data-phase') ?? null })
     const fr = fab.getBoundingClientRect()
@@ -98,12 +98,13 @@ try {
     return JSON.stringify({
       phase: col.getAttribute('data-phase'),
       inFab: fab.contains(g),
+      hasTrigger: !!document.querySelector('.filex-hero-fab .filex-group-trigger'),
       top: Math.round(fr.top), expectTop: Math.round(cr.top + 14),
       rightGap: Math.round(window.innerWidth - fr.right - cr.right), expectRightGap: 28,
       zIndex: getComputedStyle(fab).zIndex,
     })
   })()`))
-  console.log('[1] click:', await evalJs(`(() => { const b = document.querySelector('.filex-hero-fab .filex-header-btn'); if (!b) return 'no-btn'; b.click(); return 'clicked' })()`))
+  console.log('[1] click:', await evalJs(`(() => { const b = document.querySelector('.filex-hero-fab .filex-group-main'); if (!b) return 'no-btn'; b.click(); return 'clicked' })()`))
   await sleep(3500)
   console.log('[1] modal:', await evalJs(`JSON.stringify({ modal: !!document.querySelector('.filex-modal') })`))
   await evalJs(`(() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })()`)
@@ -116,6 +117,7 @@ try {
     phase: document.querySelector('[data-phase]')?.getAttribute('data-phase'),
     fabHidden: !document.querySelector('.filex-hero-fab'),
     headerIcon: !!document.querySelector('[data-slot="conversation.session.header.utilities"] .filex-header-btn'),
+    headerGroup: !!document.querySelector('[data-slot="conversation.session.header.utilities"] .filex-group'),
   })`))
 
   // 3. click a chat file link → editor modal

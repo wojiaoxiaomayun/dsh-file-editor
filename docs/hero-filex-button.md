@@ -8,6 +8,8 @@
    右上角**——即平时聊天窗口里标题栏图标所在的角落。
 2. **对话中点击文件**（工具行路径链接、产物文件行、正文文件提及）希望
    直接在编辑器里预览，而不是用系统默认程序打开。
+3. **打开方式可切换**（编辑器 / 文件夹 / VSCode）：该模式下拉只在
+   **hero / 新建会话页**出现；聊天页标题栏保持单一内置编辑器图标不变。
 
 ## 为什么不能只用框架现有槽位
 
@@ -33,10 +35,17 @@
 3. 定位取 `top: rect.top + 14`、`right: viewportWidth - rect.right + 28`，
    与有记录窗口里标题栏工具位完全一致（header 上边距 12px + 28px 高的按钮
    在 32px 标题行垂直居中 → 14px；右边距 28px）。
-4. 渲染同一个 `HeaderGroup`（单个内置编辑器图标），点击行为与标题栏一致：
-   空白会话绑定该会话（cwd = 其工作区）；完全无会话时给出提示。
+4. 渲染 `HeroGroup`（主按钮 + 模式下拉）：
+   - 主按钮按当前记忆的模式执行动作（编辑器 → 弹窗；文件夹 → 系统文件
+     管理器；VSCode → `code` CLI 打开工作区），默认「编辑器」；
+   - 右下拉切换模式：选中即写入 localStorage 并立即执行该动作；
+   - 宿主 `fs.capabilities` 探测不到 `code` 时自动隐藏 VSCode 项；
+   - 空白会话绑定该会话（cwd = 其工作区）；完全无会话时给出提示。
 5. 不设显式 z-index（`.filex-hero-fab{position:fixed;pointer-events:auto}`），
    在 overlay 层内按 DOM 顺序排在弹窗/提示之下。
+
+> 聊天页（`conversation.session.header.utilities`）注册的是 `HeaderIcon`：
+> 单个内置编辑器圆按钮（`.filex-header-btn`），不带下拉，行为与升级前一致。
 
 ## 实现二：对话内文件点击 → 编辑器预览
 
@@ -67,9 +76,10 @@ getter 访问器**（own accessor，`configurable: true`），普通赋值静默
 浏览器 cookie，驱动 headless Chrome 探测真实 GUI；`--port` 指定当前
 GUI 端口）：
 
-- hero 阶段：`.filex-header-btn` 渲染在会话列右上角（`top≈14`、右缘距列右缘
-  ≈28px、`z-index:auto`），点击可打开文件预览弹窗；
-- 有记录会话：浮层隐藏，标题栏图标照常显示，无重复图标；
+- hero 阶段：`.filex-group`（主按钮 + 下拉）渲染在会话列右上角（`top≈14`、
+  右缘距列右缘 ≈28px、`z-index:auto`），点击主按钮可打开文件预览弹窗；
+- 有记录会话：浮层隐藏，标题栏的 `.filex-header-btn` 单图标照常显示，
+  且标题栏内**没有** `.filex-group`（无重复、无下拉）；
 - 对话内点击 `fileLink` 文件链接：编辑器弹窗打开并加载该文件（显示
   文件名 + 内容），聊天侧无「打开失败」错误条。
 
