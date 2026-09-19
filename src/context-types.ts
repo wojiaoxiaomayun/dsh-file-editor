@@ -116,17 +116,6 @@ export interface FilexSlotsService {
   inject(key: string, callback: () => () => void): () => void
 }
 
-/**
- * The cross-plugin right-sidebar face (`dsh-client-ui-sidebar-right` provides
- * it as `ctx.sidebarRight`). Only the expand-toggle and expanded-state read
- * are used here, to re-paint the header's corner expand button beside the
- * explorer ButtonGroup while the plugin occupies the corner seat.
- */
-export interface FilexSidebarRight {
-  isExpanded(): boolean
-  toggleExpanded(): void
-}
-
 declare module 'cordis' {
   interface Context {
     webServer: FilexWebServer

@@ -18,39 +18,18 @@ export const CSS = `
    down. An 8px radius keeps it a rounded square rather than a full circle. */
 .filex-header-btn{width:28px;height:28px;padding:0;border-radius:8px}
 
-/* ── hero ButtonGroup (shell.overlay entry) ──────────────────────────── */
-/* The mode group shown only on the hero / new-session screen: the left
+/* ── hero ButtonGroup (hero.flex slot entry) ─────────────────────────── */
+/* The mode group shown on the hero / blank-session screen: the left
    button carries the remembered mode's icon, the right chevron the mode
    dropdown. Outer corners use the same rounded-rectangle radius as the
    header buttons (8px on a 28px-tall button), so the group reads as one
-   pill consistent with the session header icons. */
+   pill consistent with the session header icons. The host is the
+   dsh-hero-flex plugin's hf-row (its own stylesheet); this sheet only
+   styles the group itself. */
 .filex-group{display:inline-flex;align-items:center;position:relative;height:28px}
 .filex-group .filex-group-main,.filex-group .filex-group-trigger{height:28px}
 .filex-group .filex-group-main{border-radius:8px 0 0 8px;padding:0 9px}
 .filex-group .filex-group-trigger{margin-left:-1px;border-radius:0 8px 8px 0;border-left:0;padding:0 7px}
-
-/* ── header corner seat (new runtime) ────────────────────────────────── */
-/* The corner occupant: the hero ButtonGroup directly left of the right-
-   sidebar expand button in one flex row — the same corner seat the shell's
-   expand button occupies alone once the header chrome is shown, now shared
-   with the plugin's open-actions group. The seat's own margin and the
-   header's padding position the row at the far right of the blank header. */
-.filex-corner{display:flex;align-items:center;gap:8px}
-/* Re-painted expand button, same footprint as the shell's ExpandButton
-   (28×28, 15px mirrored panel icon) but with a rounded-rectangle corner to
-   match the editor button beside it; visible only while the panel is
-   collapsed. */
-.filex-corner-expand{width:28px;height:28px;color:var(--dsw-alias-label-secondary,#9ca3af);cursor:pointer;background:transparent;border:none;border-radius:8px;flex:none;justify-content:center;align-items:center;padding:6px;display:inline-flex}
-.filex-corner-expand:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(128,128,128,.15))}
-.filex-corner-expand-icon{transform:scaleX(-1)}
-
-/* ── hero floating utility (shell.overlay entry) ─────────────────────── */
-/* The ButtonGroup, pinned by the plugin to the conversation column's
-   top-right while the column is in its hero phase. The shell.overlay layer
-   is click-through by design, so the entry opts back into pointer events;
-   no explicit z-index keeps it below sibling overlay entries (modal,
-   notices) and any body-portaled popup. */
-.filex-hero-fab{position:fixed;pointer-events:auto}
 
 /* ── transient notice strip ──────────────────────────────────────────── */
 .filex-notice{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:2147483003;display:flex;align-items:center;gap:10px;max-width:70vw;padding:9px 14px;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--dsw-alias-state-warn-primary,#f59e0b);background:var(--dsw-alias-bg-layer-2,#1b1b22);border:1px solid rgba(245,158,11,.5);border-radius:10px;box-shadow:0 8px 28px rgba(0,0,0,.45);pointer-events:auto}

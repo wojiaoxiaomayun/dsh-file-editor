@@ -25,57 +25,50 @@
 
 ## 实现一：Hero 的打开方式组（`src/client/index.tsx`）
 
-### 新版（0.1.6-alpha.2+）：接管 header 的 corner 座位，与展开按钮并排
+### 现在（0.1.9+，独立插件化）：只经 `hero.flex` 槽位渲染
 
-新版空白页的 header 不再整体隐藏：`headerBlank` 只是压缩高度，仍铺出
-`leading` 与 `corner` 两个座位，且**右侧边栏的展开按钮就注册在
-`conversation.session.header.corner`**（single 座位、priority 0）。插件以
-**`priority:-1`**（最低 shadowing 优先级，single 座位只有它渲染）接管该
-座位，组件内渲染 `HeroGroup`（编辑器 / 文件夹 / VSCode 的 ButtonGroup，
-**圆角样式原样保留**）+ 重绘的展开按钮，一行 flex 并排：
+hero 右上角 flex 已抽成独立插件 **`@dsh-xhl/dsh-hero-flex`**：它接管
+`conversation.session.header.corner`（single 座位、**priority -1**，最低
+shadowing 优先级 → 替换 shell 自带的右侧栏展开按钮及其它占用者），并在
+注册时通过 `children: { 'hero.flex': { kind: 'list', scope: 'session' } }`
+声明一个**插件可追加**的 `hero.flex` 子槽位，渲染一行：
+
+```
+[ hero.flex 槽位条目 ] [ 重绘的右侧栏展开按钮 ]
+```
+
+本插件的 `HeroGroup`（编辑器 / 文件夹 / VSCode 的 ButtonGroup）只注册进
+`hero.flex`：
 
 ```ts
-ctx.slots.inject('conversation.session.header.corner', () =>
+ctx.slots.inject('hero.flex', () =>
   ctx.slots.register(
-    { name: 'conversation.session.header.corner', priority: -1, label: '文件预览 / 编辑（角落）' },
-    (props) => <HeaderCornerGroup sessionId={props.sessionId} />,
+    { name: 'hero.flex', id: 'file-explorer', order: 10, label: '文件预览 / 编辑（hero）' },
+    (props) => <HeroGroup sessionId={props.sessionId} useSessions={props.useSessions} />,
   ))
 ```
 
-- `slots.inject` 自带「等待声明」机制：corner 座位声明一出现才注册，旧版
-  （rc.6 无该座位）effect 永不触发，自动回退到下面的 overlay 方案；
-- `HeaderCornerGroup` 探测 `utilities` 座位：**有记录会话只显示展开按钮**
-  （编辑器图标已在 utilities），空白页显示 ButtonGroup + 展开按钮并排；
-- 展开按钮**重绘**（28×28、`IconPanelLeftOutline16`），点击走
-  `ctx.get('sidebarRight', false)`（渲染期轮询解析）的 `toggleExpanded()`，
-  面板展开时按 `data-sidebar-right-open` 自动隐藏；
-- `HeroGroup` 新增可选 `sessionId` prop：corner 座位从 session 标准 kit 拿
-  sessionId，overlay 兜底仍用 `useSessions` → `state.current`。
+- `slots.inject` 自带「等待声明」机制：**只有 hero-flex 安装并声明
+  `hero.flex` 时才会注册**；未安装 hero-flex 时 effect 永不触发，
+  hero 组不显示——这正是“没注入这个插件，hero 也不显示”的预期行为。
+- 条目是 `session` 作用域：自动获得标准 session kit（`sessionId`、
+  `useSession`、`useSessions` 等）。
+- 有记录会话时 header 的 `utilities` 座位渲染，hero.flex 条目自动隐藏
+  （只留重绘的展开按钮），避免与标题栏功能图标重复。
 
-### 旧版（rc.6 及更早）回退：`HeroFilexButton`（shell.overlay 浮层）
+> 本插件**不再**占用 `conversation.session.header.corner`（旧版 priority
+> -1 / 回退 -0.5 已移除），也**不再**通过 `shell.overlay` 浮层绘制 hero
+> 按钮（旧版 `HeroFilexButton` 已删除）。相关样式 `.filex-corner` /
+> `.filex-corner-expand` / `.filex-hero-fab` 一并移除。
 
-注册进 `shell.overlay`（框架自带的「全窗口浮层」list 槽位，root 作用域，
-任何会话状态都在）：
+### 历史（0.1.6-0.1.8）：插件自身接管 corner 座位
 
-1. 每 400ms + `resize` 时测量会话列（`document.querySelector('[data-phase]')`，
-   ConversationRoot 根节点）的 `getBoundingClientRect()`。
-2. 仅当列的 `data-phase === 'hero'`（无会话 hero 或空白会话 hero）时显示；
-   进入 `active`（有记录）后自动隐藏——此时标题栏自带的图标接管，不会重复。
-   新版下 `.filex-corner` 渲染时也自动隐藏（两种路径永不重叠）。
-3. 定位取 `top: rect.top + 14`、`right: viewportWidth - rect.right + 28`，
-   与有记录窗口里标题栏工具位完全一致（header 上边距 12px + 28px 高的按钮
-   在 32px 标题行垂直居中 → 14px；右边距 28px）。
-4. 渲染 `HeroGroup`（主按钮 + 模式下拉）：
-   - 主按钮按当前记忆的模式执行动作（编辑器 → 弹窗；文件夹 → 系统文件
-     管理器；VSCode → `code` CLI 打开工作区），默认「编辑器」；
-   - 右下拉切换模式：选中即写入 localStorage 并立即执行该动作；
-   - 宿主 `fs.capabilities` 探测不到 `code` 时自动隐藏 VSCode 项；
-   - 空白会话绑定该会话（cwd = 其工作区）；完全无会话时给出提示。
-5. 不设显式 z-index（`.filex-hero-fab{position:fixed;pointer-events:auto}`），
-   在 overlay 层内按 DOM 顺序排在弹窗/提示之下。
-
-> 聊天页（`conversation.session.header.utilities`）注册的是 `HeaderIcon`：
-> 单个内置编辑器圆按钮（`.filex-header-btn`），不带下拉，行为与升级前一致。
+旧版空白页的 header 不再整体隐藏：`headerBlank` 只是压缩高度，仍铺出
+`leading` 与 `corner` 两个座位，且**右侧边栏的展开按钮就注册在
+`conversation.session.header.corner`**（single 座位、priority 0）。插件以
+**`priority:-1`**（最低 shadowing 优先级，single 座位只有它渲染）接管该
+座位，组件内渲染 `HeroGroup` + 重绘的展开按钮，一行 flex 并排。该方案在
+插件化之后移除，由 dsh-hero-flex 统一承担。
 
 ## 实现二：对话内文件点击 → 编辑器预览
 
@@ -106,14 +99,17 @@ getter 访问器**（own accessor，`configurable: true`），普通赋值静默
 浏览器 cookie，驱动 headless Chrome 探测真实 GUI；`--port` 指定当前
 GUI 端口）。
 
-**profile test**（0.1.6-alpha.2）实测：
+**profile test（0.1.9，插件化后）实测/预期**：
 
-- hero 阶段：`.filex-corner` 内 `HeroGroup`（ButtonGroup，**圆角**：主按钮
-  `14px 0 0 14px`、下拉 `0 14px 14px 0`）+ 展开按钮**并排**（均 28×28、
-  gap 8px、顶对齐）；下拉含 编辑器 / 文件夹 / VSCode 三项；主按钮点击打开
-  文件预览弹窗，展开按钮点击右侧栏展开并隐藏自身；`.filex-hero-fab` 隐藏；
-- 有记录会话：corner 只留展开按钮，标题栏 `.filex-header-btn` 单图标照常
-  显示（全页仅 1 个文件图标），标题栏内没有 `.filex-group`；
+- 安装 `@dsh-xhl/dsh-hero-flex`：hero / 空白会话页右上角为
+  `[文件按钮组][展开按钮]` 并排（`.hf-row`，均 28×28、gap 8px）；按钮组
+  主按钮点击打开文件预览弹窗，下拉含 编辑器 / 文件夹 / VSCode 三项；
+  展开按钮点击右侧栏展开并隐藏自身；
+- **不安装** `@dsh-xhl/dsh-hero-flex`：hero / 空白会话页**不显示**文件
+  按钮组（没有浮层、没有 corner 回退）；有记录会话的标题栏
+  `.filex-header-btn` 单图标照常显示；
+- 有记录会话：hero.flex 条目自动隐藏（只留展开按钮），标题栏
+  `.filex-header-btn` 单图标照常显示（全页仅 1 个文件图标）；
 - 对话内点击 `fileLink` 文件链接：编辑器弹窗打开并加载该文件（显示
   文件名 + 内容），聊天侧无「打开失败」错误条。
 
