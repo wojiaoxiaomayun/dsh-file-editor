@@ -29,11 +29,12 @@ import {
   IconChevronDownOutline14,
   IconEditOutline16,
   IconFolderOpen16,
+  IconPanelLeftOutline16,
   Menu,
   Tooltip,
   type MenuEntry,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { Context, FilexSessionListState, FilexUseSessions } from '../context-types.ts'
+import type { Context, FilexSessionListState, FilexSidebarRight, FilexUseSessions } from '../context-types.ts'
 import { ExplorerModal } from './Explorer.tsx'
 import { api } from './api.ts'
 import { wrapOpenPath, wrapOpenWorkspacePath, type OpenPathInterceptDeps } from './openpath-intercept.ts'
@@ -143,6 +144,23 @@ function openExplorer(sessionId: string | undefined, path?: string): void {
   emit()
 }
 
+/**
+ * Resolve the session's authoritative working directory from the host
+ * (`session.cwd` reads the session header), falling back to the framework
+ * session-list hint only when the host round-trip fails. This keeps
+ * reveal / vscode pointing at the session's own workspace even when the
+ * session-list snapshot carries no cwd for the bound session.
+ */
+async function resolveCwdHint(sessionId: string, fallback?: string): Promise<string | undefined> {
+  try {
+    const result = await api.sessionCwd({ sessionId })
+    if (result.cwd !== '') return result.cwd
+  } catch {
+    // fall through to the hint
+  }
+  return fallback
+}
+
 /** Ask the host to reveal the session's working folder in the OS file manager. */
 async function openSystemFolder(sessionId: string | undefined, cwd?: string): Promise<void> {
   const resolved = sessionId !== undefined && sessionId !== '' ? sessionId : activeSessionId
@@ -151,7 +169,8 @@ async function openSystemFolder(sessionId: string | undefined, cwd?: string): Pr
     return
   }
   try {
-    const result = await api.fsReveal({ sessionId: resolved }, cwd)
+    const hint = await resolveCwdHint(resolved, cwd)
+    const result = await api.fsReveal({ sessionId: resolved }, hint)
     showNotice(`已打开文件夹：${result.cwd}`)
   } catch (error) {
     showNotice(`打开系统文件夹失败：${error instanceof Error ? error.message : String(error)}`)
@@ -166,7 +185,8 @@ async function openInVscode(sessionId: string | undefined, cwd?: string): Promis
     return
   }
   try {
-    const result = await api.fsVscode({ sessionId: resolved }, cwd)
+    const hint = await resolveCwdHint(resolved, cwd)
+    const result = await api.fsVscode({ sessionId: resolved }, hint)
     showNotice(`已在 VS Code 打开：${result.cwd}`)
   } catch (error) {
     showNotice(`用 VS Code 打开失败：${error instanceof Error ? error.message : String(error)}`)
@@ -252,17 +272,23 @@ function HeaderIcon(props: { sessionId?: string }): JSX.Element {
 
 /**
  * The hero ButtonGroup: the left button carries the remembered mode's icon and
- * runs its action, the right chevron opens the mode dropdown. Rendered only on
- * the hero / new-session screen — the in-chat header keeps the single
- * built-in-editor `HeaderIcon`.
+ * runs its action, the right chevron opens the mode dropdown. Rendered on the
+ * hero / new-session screen (both the corner seat on the new runtime and the
+ * floating fallback) — the in-chat header keeps the single built-in-editor
+ * `HeaderIcon`.
+ *
+ * `sessionId` is optional: the corner seat supplies it from the session
+ * standard kit; the floating fallback (root-scoped overlay) resolves it from
+ * `useSessions` → `state.current` instead.
  */
-function HeroGroup(props: { useSessions?: FilexUseSessions }): JSX.Element {
+function HeroGroup(props: { sessionId?: string; useSessions?: FilexUseSessions }): JSX.Element {
   const state = useSyncExternalStore(subscribe, getSnapshot)
   const [menuOpen, setMenuOpen] = useState(false)
   const useSessions = props.useSessions ?? (() => undefined)
   // Per-session workspace cwd from the framework session list — a hint for
   // the reveal / vscode actions when the session carries no header cwd.
-  const sessionId = useSessions((s: FilexSessionListState) => s.current) as string | undefined
+  const current = useSessions((s: FilexSessionListState) => s.current) as string | undefined
+  const sessionId = props.sessionId ?? current
   const sessionCwd = useSessions(
     (s: FilexSessionListState) => (sessionId !== undefined ? s.byId?.[sessionId]?.cwd : undefined),
   ) as string | undefined
@@ -331,6 +357,106 @@ function HeroGroup(props: { useSessions?: FilexUseSessions }): JSX.Element {
 }
 
 /**
+ * Corner expand button re-painted beside the explorer ButtonGroup while this
+ * plugin occupies the header's corner seat. Matches the shell's `ExpandButton`
+ * (28×28, mirrored panel icon, tooltip); the toggle goes through the
+ * cross-plugin `sidebarRight` face. Hides itself while the panel is open,
+ * exactly like the shipped button — the DOM probe (`data-sidebar-right-open`)
+ * is the same attribute the shell's panel root carries, so it tracks even
+ * opens that did not come from this button.
+ */
+function CornerExpandButton(props: { sidebar: FilexSidebarRight }): JSX.Element | null {
+  const [expanded, setExpanded] = useState(false)
+
+  useEffect(() => {
+    const probe = (): void => {
+      setExpanded(document.querySelector('[data-sidebar-right-open]') !== null)
+    }
+    probe()
+    const observer = new MutationObserver(probe)
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-sidebar-right-open'] })
+    window.addEventListener('resize', probe)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', probe)
+    }
+  }, [])
+
+  if (expanded) return null
+  return (
+    <Tooltip label="展开右侧栏" side="bottom" delayMs={500}>
+      <button
+        type="button"
+        className="filex-corner-expand"
+        aria-label="展开右侧栏"
+        data-sidebar-right-expand=""
+        onClick={() => { props.sidebar.toggleExpanded() }}
+      >
+        <IconPanelLeftOutline16 className="filex-corner-expand-icon" />
+      </button>
+    </Tooltip>
+  )
+}
+
+/**
+ * The header's corner seat while the new-session header chrome is blank: the
+ * explorer ButtonGroup sits directly left of the expand button — the same
+ * corner seat, one flex row, no floating layer, no measuring. In a session
+ * with records the `utilities` seat renders (where the editor icon lives), so
+ * only the expand button is re-painted here; the DOM probe keeps the pair
+ * from ever duplicating.
+ */
+function HeaderCornerGroup(props: { sessionId?: string }): JSX.Element {
+  const [utilitiesPresent, setUtilitiesPresent] = useState(false)
+  const [sidebar, setSidebar] = useState<FilexSidebarRight | undefined>(undefined)
+
+  // The sidebarRight service is provided by the right-sidebar bundle after
+  // this plugin's apply, and sits on a cordis scope the plugin reads through
+  // `ctx.get` (never through a declared inject, so runtimes without the
+  // right-sidebar bundle keep working). Re-probe until it resolves, then
+  // re-paint the expand button. The corner group itself only ever mounts on
+  // runtimes that declare the corner seat, so this always succeeds here.
+  useEffect(() => {
+    let alive = true
+    let tries = 0
+    const read = (): void => {
+      if (!alive) return
+      let value: FilexSidebarRight | undefined
+      try {
+        value = (ctxRef?.get?.('sidebarRight', false) ?? (ctxRef as Context & { sidebarRight?: FilexSidebarRight })?.sidebarRight) as FilexSidebarRight | undefined
+      } catch {
+        value = undefined
+      }
+      if (value !== undefined) {
+        setSidebar(value)
+        return
+      }
+      tries += 1
+      if (tries < 40) setTimeout(read, 250)
+    }
+    read()
+    return () => { alive = false }
+  }, [])
+
+  useEffect(() => {
+    const probe = (): void => {
+      setUtilitiesPresent(document.querySelector('[data-slot="conversation.session.header.utilities"]') !== null)
+    }
+    probe()
+    const observer = new MutationObserver(probe)
+    observer.observe(document.body, { childList: true, subtree: true })
+    return () => observer.disconnect()
+  }, [])
+
+  return (
+    <div className="filex-corner">
+      {!utilitiesPresent && <HeroGroup sessionId={props.sessionId} />}
+      {sidebar !== undefined && <CornerExpandButton sidebar={sidebar} />}
+    </div>
+  )
+}
+
+/**
  * Hero / new-session floating utility: the hero ButtonGroup, rendered by the
  * plugin itself through the generic `shell.overlay` floating layer (no shell
  * change needed) and pinned to the conversation column's top-right corner —
@@ -342,12 +468,21 @@ function HeroGroup(props: { useSessions?: FilexUseSessions }): JSX.Element {
  * tracked automatically. Clicking behaves exactly like the in-chat icon: in a
  * blank-session hero the actions bind to that session, and with no session
  * at all they surface the no-session notice.
+ *
+ * On the new runtime the corner seat carries the same ButtonGroup, so this
+ * fallback hides itself the moment `.filex-corner` is rendered — the two
+ * paths never overlap.
  */
 function HeroFilexButton(props: { useSessions?: FilexUseSessions }): JSX.Element | null {
   const [pos, setPos] = useState<{ top: number; right: number } | null>(null)
 
   useEffect(() => {
     const update = (): void => {
+      // The header's corner seat owns the ButtonGroup on the new runtime.
+      if (document.querySelector('.filex-corner') !== null) {
+        setPos(null)
+        return
+      }
       const column = document.querySelector<HTMLElement>('[data-phase]')
       if (column === null || column.getAttribute('data-phase') !== 'hero') {
         setPos(null)
@@ -476,6 +611,16 @@ export function apply(ctx: Context): void {
     // its utilities seat) is absent or deliberately hidden. The entry
     // positions itself from the rendered column, so it lands exactly where
     // the header icon sits once the conversation has records.
+    //
+    // New runtime (0.1.6-alpha.2+): the header keeps its corner seat through
+    // the blank-session hero, and the right-sidebar expand button lives in it.
+    // The plugin then occupies the corner itself (`priority:-1`, the lowest
+    // shadowing rank) and lays the ButtonGroup beside a re-painted expand
+    // button — one row in the header layout, no floating layer. `slots.inject`
+    // runs the registration the moment the seat is declared, so runtimes
+    // without the seat (rc.6 and earlier) simply never mount it; the floating
+    // fallback above then stays the only path and hides itself the moment the
+    // corner group renders.
     ctx.slots.inject('shell.overlay', () => {
       const overlay = ctx.slots.register(
         { name: 'shell.overlay', id: 'file-explorer-overlay', order: 100, label: '文件预览' },
@@ -487,6 +632,19 @@ export function apply(ctx: Context): void {
       )
       return () => { overlay(); heroFab() }
     })
+
+    // New runtime only: take the header's corner seat (single slot, occupied
+    // by the expand button at priority 0) at priority -1 — the lowest
+    // shadowing rank renders — and lay the explorer ButtonGroup beside a
+    // re-painted expand button. `HeaderCornerGroup` probes the `utilities`
+    // seat itself (so a session with records shows only the expand button
+    // here) and resolves the `sidebarRight` face lazily at render time. On
+    // runtimes where the seat is never declared this effect never fires.
+    ctx.slots.inject('conversation.session.header.corner', () =>
+      ctx.slots.register(
+        { name: 'conversation.session.header.corner', priority: -1, label: '文件预览 / 编辑（角落）' },
+        (props: { sessionId?: string }) => <HeaderCornerGroup sessionId={props.sessionId} />,
+      ))
 
     // Hide the VSCode option when the host cannot launch it.
     probeVscode()

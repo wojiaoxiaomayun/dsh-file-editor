@@ -89,12 +89,21 @@ export function isWithin(parent: string, child: string): boolean {
   return sep || c.startsWith(p + '\\') || c.startsWith(p + '/')
 }
 
-/** Resolve a session's authoritative working directory (header cwd first, process cwd last). */
+/**
+ * Resolve a session's authoritative working directory (header cwd first).
+ * A session with no workspace has no meaningful directory — falling back to
+ * the host process cwd (the DSH installation's home) would silently point
+ * file operations at the wrong tree, so this fails loudly instead.
+ */
 function sessionCwdOf(ctx: Context, sessionId: string): string {
   const session = ctx.sessions.get(sessionId)
   const headerCwd = session?.header.cwd
   if (headerCwd !== undefined && headerCwd !== '') return resolve(headerCwd)
-  return process.cwd()
+  throw new FilexError(
+    'no-workspace',
+    '该会话没有关联的工作区目录。请先为该会话选择一个工作区。',
+    400,
+  )
 }
 
 async function readJsonBody(req: FilexHttpRequest): Promise<Record<string, unknown>> {
@@ -279,20 +288,23 @@ function openInSystemFileManager(target: string): boolean {
 
 /**
  * Resolve the directory a reveal/open action should point at. Authoritative
- * source: the session's own header cwd. When it is absent (sessions created
- * without workspace metadata fall back to the host process cwd — usually
- * meaningless), accept the loopback-only client's session-list cwd hint so
- * the folder still opens where the user works.
+ * source: the session's own header cwd. When it is absent (a session created
+ * without workspace metadata), fall back to the loopback-only client's
+ * session-list cwd hint — and only then fail loudly, never to the host
+ * process cwd (which is the DSH installation's home directory and would make
+ * "open folder" appear to open the user's home).
  */
 function revealCwdOf(ctx: Context, sessionId: string, rawHint: unknown): string {
   const session = ctx.sessions.get(sessionId)
   const headerCwd = session?.header.cwd
   const hint = typeof rawHint === 'string' && rawHint !== '' ? rawHint : undefined
-  return headerCwd !== undefined && headerCwd !== ''
-    ? resolve(headerCwd)
-    : hint !== undefined && isAbsolute(hint)
-      ? resolve(hint)
-      : process.cwd()
+  if (headerCwd !== undefined && headerCwd !== '') return resolve(headerCwd)
+  if (hint !== undefined && isAbsolute(hint)) return resolve(hint)
+  throw new FilexError(
+    'no-workspace',
+    '该会话没有关联的工作区目录，无法打开系统文件夹。请先为该会话选择一个工作区。',
+    400,
+  )
 }
 
 /**

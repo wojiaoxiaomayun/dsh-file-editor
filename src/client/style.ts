@@ -12,21 +12,37 @@
  */
 export const CSS = `
 /* ── header icon (utilities slot) ────────────────────────────────────── */
-/* Same 28×28 round button as dsh-git-gui's header entry (.gg-header-btn):
-   the primitive sm button is already 28px tall with a 16px icon, so only
-   the width / padding / radius need pinning down. */
-.filex-header-btn{width:28px;height:28px;padding:0;border-radius:14px}
+/* Same 28×28 header entry as dsh-git-gui's (.gg-header-btn) but with a
+   modest rounded-rectangle corner: the primitive sm button is already 28px
+   tall with a 16px icon, so only the width / padding / radius need pinning
+   down. An 8px radius keeps it a rounded square rather than a full circle. */
+.filex-header-btn{width:28px;height:28px;padding:0;border-radius:8px}
 
 /* ── hero ButtonGroup (shell.overlay entry) ──────────────────────────── */
 /* The mode group shown only on the hero / new-session screen: the left
    button carries the remembered mode's icon, the right chevron the mode
-   dropdown. Outer corners reuse the in-chat header-button radius (14px on
-   a 28px-tall button = a fully round cap), so the group reads as one pill
-   with the same curve as the session header icon. */
+   dropdown. Outer corners use the same rounded-rectangle radius as the
+   header buttons (8px on a 28px-tall button), so the group reads as one
+   pill consistent with the session header icons. */
 .filex-group{display:inline-flex;align-items:center;position:relative;height:28px}
 .filex-group .filex-group-main,.filex-group .filex-group-trigger{height:28px}
-.filex-group .filex-group-main{border-radius:14px 0 0 14px;padding:0 9px}
-.filex-group .filex-group-trigger{margin-left:-1px;border-radius:0 14px 14px 0;border-left:0;padding:0 7px}
+.filex-group .filex-group-main{border-radius:8px 0 0 8px;padding:0 9px}
+.filex-group .filex-group-trigger{margin-left:-1px;border-radius:0 8px 8px 0;border-left:0;padding:0 7px}
+
+/* ── header corner seat (new runtime) ────────────────────────────────── */
+/* The corner occupant: the hero ButtonGroup directly left of the right-
+   sidebar expand button in one flex row — the same corner seat the shell's
+   expand button occupies alone once the header chrome is shown, now shared
+   with the plugin's open-actions group. The seat's own margin and the
+   header's padding position the row at the far right of the blank header. */
+.filex-corner{display:flex;align-items:center;gap:8px}
+/* Re-painted expand button, same footprint as the shell's ExpandButton
+   (28×28, 15px mirrored panel icon) but with a rounded-rectangle corner to
+   match the editor button beside it; visible only while the panel is
+   collapsed. */
+.filex-corner-expand{width:28px;height:28px;color:var(--dsw-alias-label-secondary,#9ca3af);cursor:pointer;background:transparent;border:none;border-radius:8px;flex:none;justify-content:center;align-items:center;padding:6px;display:inline-flex}
+.filex-corner-expand:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(128,128,128,.15))}
+.filex-corner-expand-icon{transform:scaleX(-1)}
 
 /* ── hero floating utility (shell.overlay entry) ─────────────────────── */
 /* The ButtonGroup, pinned by the plugin to the conversation column's
